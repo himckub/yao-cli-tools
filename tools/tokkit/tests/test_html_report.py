@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from tokkit.cli import render_html_report
 from tokkit.db import UsageRecord, init_db, upsert_usage_record
-from tokkit.tok import _refresh_daily_html_report_if_needed, _run_html_command, _run_scan_command
+from tokkit.tok import _refresh_daily_html_report_if_needed, _run_billing_command, _run_html_command, _run_scan_command
 
 
 class HtmlReportTests(unittest.TestCase):
@@ -53,6 +53,10 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("终端占比", rendered)
         self.assertIn("模型消耗排行", rendered)
         self.assertIn("每日明细", rendered)
+        self.assertIn("计费费用", rendered)
+        self.assertIn("Billable Cost", rendered)
+        self.assertIn("allocated_cost_usd", rendered)
+        self.assertIn("billable_cost_usd", rendered)
         self.assertIn('class="topbar"', rendered)
         self.assertIn('data-range="7"', rendered)
         self.assertIn('data-range="30"', rendered)
@@ -88,6 +92,19 @@ class HtmlReportTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         run_report.assert_called_once_with(["report-html", "--output", "/tmp/report.html", "--last", "14"])
+
+    def test_tok_billing_command_maps_common_actions(self) -> None:
+        with patch("tokkit.tok._run_tokkit", return_value=0) as run_tokkit:
+            status = _run_billing_command(["init", "--force"])
+
+        self.assertEqual(status, 0)
+        run_tokkit.assert_called_once_with(["billing", "init", "--force"])
+
+        with patch("tokkit.tok._run_tokkit", return_value=0) as run_tokkit:
+            status = _run_billing_command(["json"])
+
+        self.assertEqual(status, 0)
+        run_tokkit.assert_called_once_with(["billing", "--json"])
 
     def test_daily_html_report_generates_once_without_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

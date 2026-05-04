@@ -256,6 +256,8 @@ tokkit report-daily --date today --timezone Asia/Shanghai
 tokkit report-range --last 7 --timezone Asia/Shanghai
 tokkit report-clients --last 30 --timezone Asia/Shanghai
 tokkit report-html --last 30 --open
+tokkit billing
+tokkit billing init
 tokkit serve-proxy --host 127.0.0.1 --port 8765 --upstream-base-url https://api.example.com/v1
 ```
 
@@ -270,9 +272,13 @@ tokkit serve-proxy --host 127.0.0.1 --port 8765 --upstream-base-url https://api.
 - `Cached Prompt`：命中缓存的 Prompt token。
 - `Reasoning`：供应商暴露的 reasoning token。
 - `Unsplit`：只能拿到总量、无法安全拆成 Prompt/Output 的 token。
-- `Est.$`：基于模型价格、Prompt、Cached Prompt 和 Output 本地估算的 API
+- `API Est.$`：基于模型价格、Prompt、Cached Prompt 和 Output 本地估算的 API
   成本；OpenAI 的 cached tokens 通常包含在 input 内，Claude/Anthropic 的
   cache read tokens 通常是独立 token，TokKit 会按不同供应商语义分别计价。
+- `Allocated $`：订阅账号的均摊成本；按同一计费周期内各记录的 API 等价成本
+  加权分摊月费。
+- `Billable $`：当前 `billing.json` 口径下的最终费用。API 来源等于
+  `API Est.$`，订阅来源等于 `Allocated $`。
 - `Credits`：供应商 credits，和美元分开保留。
 - `Records`：当前行背后的归一化记录数量。
 
@@ -282,7 +288,7 @@ tokkit serve-proxy --host 127.0.0.1 --port 8765 --upstream-base-url https://api.
 - Cached Prompt 仍然是 Prompt 体量，只是通常价格更低。
 - Output 常常只是 patch、命令或解释，远小于生成它所需要的上下文。
 
-## 价格与预算
+## 价格、计费与预算
 
 查看内置价格：
 
@@ -290,6 +296,44 @@ tokkit serve-proxy --host 127.0.0.1 --port 8765 --upstream-base-url https://api.
 tok pricing
 tok pricing json
 ```
+
+配置真实计费口径：
+
+```bash
+tok billing
+tok billing init
+tok billing json
+```
+
+`~/.tokkit/billing.json` 示例：
+
+```json
+{
+  "profiles": {
+    "claude-code": {
+      "mode": "subscription",
+      "name": "Claude Max",
+      "monthly_usd": 100,
+      "cycle_start_day": 1
+    },
+    "codex": {
+      "mode": "api",
+      "name": "OpenAI API"
+    },
+    "warp": {
+      "mode": "credits",
+      "name": "Warp Credits"
+    }
+  }
+}
+```
+
+订阅均摊逻辑：
+
+- `api`：`Billable $ = API Est.$`。
+- `subscription`：`Allocated $ = 月费 × 当前记录 API Est.$ / 同计费周期总 API Est.$`。
+- 如果某个订阅周期内没有可估价 API 成本，则回退为按 `Total` token 权重均摊。
+- `credits`：美元费用留空，继续在 `Credits` 字段展示。
 
 创建预算文件：
 
@@ -318,7 +362,8 @@ tok budget json
 
 说明：
 
-- `Est.$` 是本地估算，不是供应商账单。
+- `API Est.$` 是 API 等价成本，不一定是供应商账单。
+- `Billable $` 更适合作为订阅账号或混合账号的实际成本口径。
 - 模型价格变化后需要更新内置价格或本地覆盖文件。
 - `partial` 和 `estimated` 来源可能没有足够字段用于估价。
 - Warp 这类 credits 会保留在 `Credits`，不会自动换算成美元。

@@ -74,6 +74,8 @@ Pricing / 定价:
   tok pricing               Show local pricing profiles / 查看本地价格档位
                             Marks built-in vs override / 标明 built-in 或 override 来源
   tok pricing json          Show pricing profiles as JSON / 以 JSON 输出价格档位
+  tok billing               Show billing allocation profiles / 查看计费与订阅均摊配置
+  tok billing init          Create a starter billing file / 创建计费配置模板
 
 Budget / 预算:
   tok budget                Show current budget status / 查看当前预算状态
@@ -124,6 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_json_command(args[1:])
     if command == "pricing":
         return _run_pricing_command(args[1:])
+    if command == "billing":
+        return _run_billing_command(args[1:])
     if command == "budget":
         return _run_budget_command(args[1:])
     if command == "doctor":
@@ -265,6 +269,17 @@ def _run_pricing_command(args: list[str]) -> int:
     if args and args[0] == "json":
         return _run_tokkit(["pricing", "--json"])
     return _run_tokkit(["pricing"])
+
+
+def _run_billing_command(args: list[str]) -> int:
+    if args and args[0] == "init":
+        command = ["billing", "init"]
+        if len(args) > 1 and args[1] == "--force":
+            command.append("--force")
+        return _run_tokkit(command)
+    if args and args[0] == "json":
+        return _run_tokkit(["billing", "--json"])
+    return _run_tokkit(["billing"])
 
 
 def _run_budget_command(args: list[str]) -> int:

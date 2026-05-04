@@ -46,7 +46,7 @@ def render_range_html_report(
             "</section>",
             '<section id="trend" class="anchor-section chart-grid">',
             _panel("每日 Token 趋势", '<div id="totalTrend"></div>', "panel.totalTrend"),
-            _panel("预估费用趋势", '<div id="costTrend"></div>', "panel.costTrend"),
+            _panel("计费费用趋势", '<div id="costTrend"></div>', "panel.costTrend"),
             _panel("Prompt / Output / 缓存趋势", '<div id="promptTrend"></div>', "panel.promptTrend"),
             _panel("缓存命中率趋势", '<div id="cacheTrend"></div>', "panel.cacheTrend"),
             "</section>",
@@ -661,7 +661,7 @@ const I18N = {
     'filters.hintAll': '当前显示全部模型。时间范围：最近 {range} 天。',
     'filters.hintSelected': '当前显示 {count} 个模型。时间范围：最近 {range} 天。',
     'panel.totalTrend': '每日 Token 趋势',
-    'panel.costTrend': '预估费用趋势',
+    'panel.costTrend': '计费费用趋势',
     'panel.promptTrend': 'Prompt / Output / 缓存趋势',
     'panel.cacheTrend': '缓存命中率趋势',
     'panel.modelRank': '模型消耗排行',
@@ -673,8 +673,11 @@ const I18N = {
     'panel.details': '每日明细',
     'summary.totalToken': '总 Token',
     'summary.currentRange': '当前筛选范围',
-    'summary.estimatedCost': '预估费用',
-    'summary.apiPricedOnly': '仅 API 可估价记录',
+    'summary.estimatedCost': 'API 估算费用',
+    'summary.billableCost': '计费费用',
+    'summary.allocatedCost': '订阅均摊',
+    'summary.apiPricedOnly': '按 API token 价格估算',
+    'summary.billingPolicy': '按 billing.json 口径',
     'summary.dailyAvg': '日均 {value}',
     'summary.prompt': 'Prompt',
     'summary.output': 'Output',
@@ -684,14 +687,16 @@ const I18N = {
     'summary.unsplit': 'Unsplit',
     'summary.totalOnlyEvents': 'total-only 事件',
     'chart.totalToken': '总 Token',
-    'chart.estimatedCost': '预估费用',
+    'chart.estimatedCost': '计费费用',
     'chart.cachedPrompt': '缓存 Prompt',
     'chart.cacheHitRate': '缓存命中率',
     'chart.records': '记录数',
     'chart.total': '总量',
     'table.date': '日期',
     'table.total': '总量',
-    'table.estimatedCost': '预估费用',
+    'table.estimatedCost': 'API 估算',
+    'table.allocatedCost': '订阅均摊',
+    'table.billableCost': '计费费用',
     'table.prompt': 'Prompt',
     'table.output': 'Output',
     'table.cachedPrompt': '缓存 Prompt',
@@ -728,7 +733,7 @@ const I18N = {
     'filters.hintAll': 'Showing all models. Range: last {range} days.',
     'filters.hintSelected': 'Showing {count} models. Range: last {range} days.',
     'panel.totalTrend': 'Daily Token Trend',
-    'panel.costTrend': 'Estimated Cost Trend',
+    'panel.costTrend': 'Billable Cost Trend',
     'panel.promptTrend': 'Prompt / Output / Cached Trend',
     'panel.cacheTrend': 'Cache Hit Rate Trend',
     'panel.modelRank': 'Model Usage Ranking',
@@ -740,8 +745,11 @@ const I18N = {
     'panel.details': 'Daily Details',
     'summary.totalToken': 'Total Tokens',
     'summary.currentRange': 'Current filter range',
-    'summary.estimatedCost': 'Estimated Cost',
-    'summary.apiPricedOnly': 'Priced API records only',
+    'summary.estimatedCost': 'API Est. Cost',
+    'summary.billableCost': 'Billable Cost',
+    'summary.allocatedCost': 'Allocated Cost',
+    'summary.apiPricedOnly': 'Token-priced API equivalent',
+    'summary.billingPolicy': 'Using billing.json policy',
     'summary.dailyAvg': 'Daily avg {value}',
     'summary.prompt': 'Prompt',
     'summary.output': 'Output',
@@ -751,14 +759,16 @@ const I18N = {
     'summary.unsplit': 'Unsplit',
     'summary.totalOnlyEvents': 'total-only events',
     'chart.totalToken': 'Total Tokens',
-    'chart.estimatedCost': 'Estimated Cost',
+    'chart.estimatedCost': 'Billable Cost',
     'chart.cachedPrompt': 'Cached Prompt',
     'chart.cacheHitRate': 'Cache Hit Rate',
     'chart.records': 'Records',
     'chart.total': 'Total',
     'table.date': 'Date',
     'table.total': 'Total',
-    'table.estimatedCost': 'Est. Cost',
+    'table.estimatedCost': 'API Est.',
+    'table.allocatedCost': 'Allocated',
+    'table.billableCost': 'Billable',
     'table.prompt': 'Prompt',
     'table.output': 'Output',
     'table.cachedPrompt': 'Cached Prompt',
@@ -879,6 +889,8 @@ function aggregate(rows, keyFn) {
       key,
       total_tokens: 0,
       estimated_cost_usd: 0,
+      allocated_cost_usd: 0,
+      billable_cost_usd: 0,
       input_tokens: 0,
       output_tokens: 0,
       cached_input_tokens: 0,
@@ -891,6 +903,8 @@ function aggregate(rows, keyFn) {
       item[field] += numberValue(row, field);
     });
     item.estimated_cost_usd += numberValue(row, 'estimated_cost_usd');
+    item.allocated_cost_usd += numberValue(row, 'allocated_cost_usd');
+    item.billable_cost_usd += numberValue(row, 'billable_cost_usd');
     item.credits += numberValue(row, 'credits');
     map.set(key, item);
   });
@@ -920,9 +934,11 @@ function totalOf(rows) {
       acc[field] += numberValue(row, field);
     });
     acc.estimated_cost_usd += numberValue(row, 'estimated_cost_usd');
+    acc.allocated_cost_usd += numberValue(row, 'allocated_cost_usd');
+    acc.billable_cost_usd += numberValue(row, 'billable_cost_usd');
     acc.credits += numberValue(row, 'credits');
     return acc;
-  }, { total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, reasoning_tokens: 0, unsplit_tokens: 0, records: 0, estimated_cost_usd: 0, credits: 0 });
+  }, { total_tokens: 0, input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, reasoning_tokens: 0, unsplit_tokens: 0, records: 0, estimated_cost_usd: 0, allocated_cost_usd: 0, billable_cost_usd: 0, credits: 0 });
 }
 
 function renderCards(rows) {
@@ -930,7 +946,9 @@ function renderCards(rows) {
   const days = Math.max(activeDates().length, 1);
   const items = [
     [t('summary.totalToken'), fmtInt(totals.total_tokens), t('summary.currentRange')],
+    [t('summary.billableCost'), fmtMoney(totals.billable_cost_usd), t('summary.billingPolicy')],
     [t('summary.estimatedCost'), fmtMoney(totals.estimated_cost_usd), t('summary.apiPricedOnly')],
+    [t('summary.allocatedCost'), fmtMoney(totals.allocated_cost_usd), t('summary.billingPolicy')],
     [t('summary.prompt'), fmtInt(totals.input_tokens), t('summary.dailyAvg', { value: fmtInt(totals.input_tokens / days) })],
     [t('summary.output'), fmtInt(totals.output_tokens), t('summary.generatedOutput')],
     [t('summary.cachedPrompt'), fmtInt(totals.cached_input_tokens), t('summary.cacheHitRate', { value: pct(totals.cached_input_tokens, totals.input_tokens) })],
@@ -1079,11 +1097,13 @@ function rankedBars(rows, labelKey, valueKey, limit = 8) {
 function dailyTable(rows) {
   if (!rows.length) return `<p class="empty">${t('empty')}</p>`;
   return `<div class="table-wrap"><table>
-    <thead><tr><th>${t('table.date')}</th><th>${t('table.total')}</th><th>${t('table.estimatedCost')}</th><th>${t('table.prompt')}</th><th>${t('table.output')}</th><th>${t('table.cachedPrompt')}</th><th>${t('table.reasoning')}</th><th>${t('table.unsplit')}</th><th>${t('table.records')}</th></tr></thead>
+    <thead><tr><th>${t('table.date')}</th><th>${t('table.total')}</th><th>${t('table.billableCost')}</th><th>${t('table.estimatedCost')}</th><th>${t('table.allocatedCost')}</th><th>${t('table.prompt')}</th><th>${t('table.output')}</th><th>${t('table.cachedPrompt')}</th><th>${t('table.reasoning')}</th><th>${t('table.unsplit')}</th><th>${t('table.records')}</th></tr></thead>
     <tbody>${[...rows].reverse().map(row => `<tr>
       <td>${escapeHtml(row.local_date || row.key)}</td>
       <td>${fmtInt(row.total_tokens)}</td>
+      <td>${fmtMoney(row.billable_cost_usd)}</td>
       <td>${fmtMoney(row.estimated_cost_usd)}</td>
+      <td>${fmtMoney(row.allocated_cost_usd)}</td>
       <td>${fmtInt(row.input_tokens)}</td>
       <td>${fmtInt(row.output_tokens)}</td>
       <td>${fmtInt(row.cached_input_tokens)}</td>
@@ -1151,7 +1171,7 @@ function renderDashboard() {
   renderCards(rows);
   renderModelChips();
   document.getElementById('totalTrend').innerHTML = lineChart(daily, 'total_tokens', { unit: 'tokens', color: '#1b365d', label: t('chart.totalToken') });
-  document.getElementById('costTrend').innerHTML = barChart(daily, 'estimated_cost_usd', { unit: '$', color: '#b56b35', label: t('chart.estimatedCost') });
+  document.getElementById('costTrend').innerHTML = barChart(daily, 'billable_cost_usd', { unit: '$', color: '#b56b35', label: t('chart.estimatedCost') });
   document.getElementById('promptTrend').innerHTML = multiLineChart(daily, [
     { label: t('summary.prompt'), key: 'input_tokens', color: '#1b365d' },
     { label: t('summary.cachedPrompt'), key: 'cached_input_tokens', color: '#2f6f55' },

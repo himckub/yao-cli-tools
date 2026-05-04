@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
+import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 
@@ -134,6 +137,58 @@ class ReportRenderingTests(unittest.TestCase):
         self.assertEqual(payload["by_model"][0]["model_label"], "Claude Opus 4.7")
         self.assertEqual(payload["by_model"][0]["estimated_cost_usd"], 18.5)
         self.assertEqual(payload["by_date"][0]["estimated_cost_usd"], 18.5)
+
+    def test_range_report_allocates_subscription_cost_by_api_equivalent_weight(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        tz = ZoneInfo("Asia/Shanghai")
+        today = datetime.now(tz).date()
+        dates = [(today - timedelta(days=1)).isoformat(), today.isoformat()]
+        for idx, (local_date, output_tokens) in enumerate(zip(dates, [1_000_000, 2_000_000], strict=False), start=1):
+            upsert_usage_record(
+                conn,
+                UsageRecord(
+                    source="claude-code:cli",
+                    app="claude-code",
+                    external_id=f"claude-sub-{idx}:{local_date}T03:00:00+08:00",
+                    started_at=f"{local_date}T03:00:00+08:00",
+                    local_date=local_date,
+                    model="claude-opus-4-7-20260416",
+                    input_tokens=0,
+                    output_tokens=output_tokens,
+                    cached_input_tokens=0,
+                    total_tokens=output_tokens,
+                    metadata={"model_provider": "anthropic"},
+                ),
+            )
+        conn.commit()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            billing_path = Path(tmp_dir) / "billing.json"
+            billing_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "claude-code": {
+                                "mode": "subscription",
+                                "monthly_usd": 90,
+                                "cycle_start_day": 1,
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"TOKKIT_BILLING_PATH": str(billing_path)}):
+                payload = json.loads(render_range_report(conn, 7, tz, json_mode=True))
+        conn.close()
+
+        by_date = {row["local_date"]: row for row in payload["by_date"]}
+        self.assertEqual(payload["by_model"][0]["estimated_cost_usd"], 75.0)
+        self.assertEqual(payload["by_model"][0]["billable_cost_usd"], 90.0)
+        self.assertAlmostEqual(by_date[dates[0]]["billable_cost_usd"], 30.0)
+        self.assertAlmostEqual(by_date[dates[1]]["billable_cost_usd"], 60.0)
 
 
 if __name__ == "__main__":

@@ -267,6 +267,8 @@ tokkit report-daily --date today --timezone Asia/Shanghai
 tokkit report-range --last 7 --timezone Asia/Shanghai
 tokkit report-clients --last 30 --timezone Asia/Shanghai
 tokkit report-html --last 30 --open
+tokkit billing
+tokkit billing init
 tokkit serve-proxy --host 127.0.0.1 --port 8765 --upstream-base-url https://api.example.com/v1
 ```
 
@@ -281,10 +283,14 @@ Core token fields:
 - `Cached Prompt`: prompt tokens that were served from cache.
 - `Reasoning`: reasoning tokens when the provider exposes them.
 - `Unsplit`: totals that could not be safely split into prompt/output fields.
-- `Est.$`: local API cost estimate calculated from model pricing, prompt,
+- `API Est.$`: local API cost estimate calculated from model pricing, prompt,
   cached prompt, and output tokens. OpenAI cached tokens are usually included in
   input totals, while Claude/Anthropic cache-read tokens are separate billable
   tokens; TokKit prices those provider semantics differently.
+- `Allocated $`: subscription cost allocated by API-equivalent cost weight
+  within the same billing cycle.
+- `Billable $`: final cost under `billing.json`. API sources use `API Est.$`;
+  subscription sources use `Allocated $`.
 - `Credits`: vendor credit units, kept separate from dollars.
 - `Records`: number of normalized usage records behind the row.
 
@@ -296,7 +302,7 @@ Why prompt can be much larger than output:
 - Output is often a short patch, command, or explanation compared with the
   context needed to produce it.
 
-## Pricing and Budgets
+## Pricing, Billing, and Budgets
 
 View built-in pricing:
 
@@ -304,6 +310,45 @@ View built-in pricing:
 tok pricing
 tok pricing json
 ```
+
+Configure actual billing policy:
+
+```bash
+tok billing
+tok billing init
+tok billing json
+```
+
+Example `~/.tokkit/billing.json`:
+
+```json
+{
+  "profiles": {
+    "claude-code": {
+      "mode": "subscription",
+      "name": "Claude Max",
+      "monthly_usd": 100,
+      "cycle_start_day": 1
+    },
+    "codex": {
+      "mode": "api",
+      "name": "OpenAI API"
+    },
+    "warp": {
+      "mode": "credits",
+      "name": "Warp Credits"
+    }
+  }
+}
+```
+
+Allocation rules:
+
+- `api`: `Billable $ = API Est.$`.
+- `subscription`: `Allocated $ = monthly_usd * row API Est.$ / cycle API Est.$`.
+- If a subscription cycle has no priced API estimate, TokKit falls back to
+  `Total` token weighting.
+- `credits`: dollar billable cost is left blank; `Credits` stays separate.
 
 Create a budget file:
 
@@ -332,7 +377,8 @@ Override pricing by creating `~/.tokkit/pricing.json`:
 
 Notes:
 
-- `Est.$` is a local estimate, not a vendor bill.
+- `API Est.$` is an API-equivalent estimate, not necessarily the vendor bill.
+- `Billable $` is the better cost column for subscription or mixed billing.
 - Pricing profiles may lag provider pricing changes unless updated.
 - Partial or estimated sources may not have enough fields for cost estimates.
 - Warp-style credits remain in `Credits` and are not converted to dollars.

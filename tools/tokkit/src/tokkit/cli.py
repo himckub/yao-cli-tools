@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .augment_capture import apply_augment_capture_patch, inspect_augment_patch, remove_augment_capture_patch
+from .billing import BillingCostAllocator, resolve_billing_config, write_billing_template
 from .budget import resolve_budget_config, write_budget_template
 from .clients import CLIENT_DEFINITIONS, detect_installed_clients, is_codex_desktop_originator, logical_client_for_usage_row
 from .db import connect_db
@@ -229,6 +230,12 @@ def build_parser() -> argparse.ArgumentParser:
     pricing_cmd = subparsers.add_parser("pricing", help="Show the local pricing profiles used for cost estimation.")
     pricing_cmd.add_argument("--json", action="store_true")
 
+    billing_cmd = subparsers.add_parser("billing", help="Show or initialize cost allocation profiles.")
+    billing_cmd.add_argument("--json", action="store_true")
+    billing_subparsers = billing_cmd.add_subparsers(dest="billing_command", required=False)
+    billing_init_cmd = billing_subparsers.add_parser("init", help="Write a starter billing.json file.")
+    billing_init_cmd.add_argument("--force", action="store_true")
+
     budget_cmd = subparsers.add_parser("budget", help="Show or initialize local cost and credits budgets.")
     budget_cmd.add_argument("--json", action="store_true")
     budget_subparsers = budget_cmd.add_subparsers(dest="budget_command", required=False)
@@ -434,6 +441,14 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "pricing":
             print(render_pricing_report(json_mode=args.json))
+            return 0
+
+        if args.command == "billing":
+            if args.billing_command == "init":
+                path = write_billing_template(force=args.force)
+                print(f"wrote billing template to {path}")
+                return 0
+            print(render_billing_report(json_mode=args.json))
             return 0
 
         if args.command == "budget":
@@ -650,6 +665,7 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
         conn.execute(
         """
         SELECT
+            local_date,
             app,
             source,
             measurement_method,
@@ -676,13 +692,16 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
             COUNT(*) AS records
         FROM usage_records
         WHERE local_date = ?
-        GROUP BY app, source, measurement_method, model, originator, model_provider
+        GROUP BY local_date, app, source, measurement_method, model, originator, model_provider
         ORDER BY total_tokens DESC, credits DESC, app, source, model, originator, model_provider, measurement_method
         """,
         (target_date,),
-        ).fetchall()
+        ).fetchall(),
+        conn=conn,
     )
     estimated_total_cost = _sum_estimated_cost(detailed_rows)
+    allocated_total_cost = _sum_cost(detailed_rows, "allocated_cost_usd")
+    billable_total_cost = _sum_cost(detailed_rows, "billable_cost_usd")
     by_terminal = _aggregate_usage_rows(
         detailed_rows,
         key_fields=["terminal"],
@@ -714,6 +733,8 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
     if json_mode:
         totals_payload = dict(totals)
         totals_payload["estimated_cost_usd"] = estimated_total_cost
+        totals_payload["allocated_cost_usd"] = allocated_total_cost
+        totals_payload["billable_cost_usd"] = billable_total_cost
         payload = {
             "date": target_date,
             "totals": totals_payload,
@@ -735,7 +756,9 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
             f"reasoning={format_int(totals['reasoning_tokens'])} "
             f"unsplit={format_int(totals['unsplit_tokens'])} "
             f"total={format_int(totals['total_tokens'])} "
-            f"est_usd={format_float(estimated_total_cost)} "
+            f"api_est_usd={format_float(estimated_total_cost)} "
+            f"allocated_usd={format_float(allocated_total_cost)} "
+            f"billable_usd={format_float(billable_total_cost)} "
             f"credits={format_float(totals['credits'])} "
             f"records={totals['records']}"
         ),
@@ -750,7 +773,9 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                 headers=[
                     "Hour",
                     "Total",
-                    "Est.$",
+                    "API Est.$",
+                    "Allocated $",
+                    "Billable $",
                     "Prompt",
                     "Output",
                     "Cached Prompt",
@@ -764,6 +789,8 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                         row["hour_label"],
                         format_int(row["total_tokens"]),
                         format_float(row["estimated_cost_usd"]),
+                        format_float(row["allocated_cost_usd"]),
+                        format_float(row["billable_cost_usd"]),
                         format_int(row["input_tokens"]),
                         format_int(row["output_tokens"]),
                         format_int(row["cached_input_tokens"]),
@@ -774,7 +801,7 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                     ]
                     for row in by_hour
                 ],
-                right_align={1, 2, 3, 4, 5, 6, 7, 8, 9},
+                right_align={1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
             )
         )
 
@@ -793,7 +820,9 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                     "Terminal",
                     "Method",
                     "Total",
-                    "Est.$",
+                    "API Est.$",
+                    "Allocated $",
+                    "Billable $",
                     "Prompt",
                     "Output",
                     "Cached Prompt",
@@ -808,6 +837,8 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                         row["method"],
                         format_int(row["total_tokens"]),
                         format_float(row["estimated_cost_usd"]),
+                        format_float(row["allocated_cost_usd"]),
+                        format_float(row["billable_cost_usd"]),
                         format_int(row["input_tokens"]),
                         format_int(row["output_tokens"]),
                         format_int(row["cached_input_tokens"]),
@@ -818,7 +849,7 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                     ]
                     for row in by_terminal
                 ],
-                right_align={2, 3, 4, 5, 6, 7, 8, 9, 10},
+                right_align={2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
             )
         )
 
@@ -837,7 +868,9 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                     "Model",
                     "Method",
                     "Total",
-                    "Est.$",
+                    "API Est.$",
+                    "Allocated $",
+                    "Billable $",
                     "Prompt",
                     "Output",
                     "Cached Prompt",
@@ -852,6 +885,8 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                         row["method"],
                         format_int(row["total_tokens"]),
                         format_float(row["estimated_cost_usd"]),
+                        format_float(row["allocated_cost_usd"]),
+                        format_float(row["billable_cost_usd"]),
                         format_int(row["input_tokens"]),
                         format_int(row["output_tokens"]),
                         format_int(row["cached_input_tokens"]),
@@ -862,7 +897,7 @@ def render_daily_report(conn: sqlite3.Connection, target_date: str, *, json_mode
                     ]
                     for row in by_model
                 ],
-                right_align={2, 3, 4, 5, 6, 7, 8, 9, 10},
+                right_align={2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
             )
         )
 
@@ -906,7 +941,8 @@ def render_range_report(conn: sqlite3.Connection, last_days: int, tz, *, json_mo
         ORDER BY local_date DESC, total_tokens DESC, app, source, model, originator, model_provider, measurement_method
         """,
         (end_date, f"-{max(last_days - 1, 0)} day"),
-        ).fetchall()
+        ).fetchall(),
+        conn=conn,
     )
     by_date_rows = _aggregate_usage_rows(
         detailed_rows,
@@ -970,12 +1006,14 @@ def render_range_report(conn: sqlite3.Connection, last_days: int, tz, *, json_mo
             "",
             "By date:",
             _render_table(
-                headers=["Date", "Total", "Est.$", "Prompt", "Output", "Cached Prompt", "Reasoning", "Unsplit", "Credits", "Records"],
+                headers=["Date", "Total", "API Est.$", "Allocated $", "Billable $", "Prompt", "Output", "Cached Prompt", "Reasoning", "Unsplit", "Credits", "Records"],
                 rows=[
                     [
                         row["local_date"],
                         format_int(row["total_tokens"]),
                         format_float(row["estimated_cost_usd"]),
+                        format_float(row["allocated_cost_usd"]),
+                        format_float(row["billable_cost_usd"]),
                         format_int(row["input_tokens"]),
                         format_int(row["output_tokens"]),
                         format_int(row["cached_input_tokens"]),
@@ -986,18 +1024,20 @@ def render_range_report(conn: sqlite3.Connection, last_days: int, tz, *, json_mo
                     ]
                     for row in by_date_rows
                 ],
-                right_align={1, 2, 3, 4, 5, 6, 7, 8, 9},
+                right_align={1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
             ),
             "",
             "By terminal:",
             _render_table(
-                headers=["Terminal", "Method", "Total", "Est.$", "Prompt", "Output", "Cached Prompt", "Reasoning", "Unsplit", "Credits", "Records"],
+                headers=["Terminal", "Method", "Total", "API Est.$", "Allocated $", "Billable $", "Prompt", "Output", "Cached Prompt", "Reasoning", "Unsplit", "Credits", "Records"],
                 rows=[
                     [
                         row["terminal"],
                         row["method"],
                         format_int(row["total_tokens"]),
                         format_float(row["estimated_cost_usd"]),
+                        format_float(row["allocated_cost_usd"]),
+                        format_float(row["billable_cost_usd"]),
                         format_int(row["input_tokens"]),
                         format_int(row["output_tokens"]),
                         format_int(row["cached_input_tokens"]),
@@ -1008,18 +1048,20 @@ def render_range_report(conn: sqlite3.Connection, last_days: int, tz, *, json_mo
                     ]
                     for row in by_terminal
                 ],
-                right_align={2, 3, 4, 5, 6, 7, 8, 9, 10},
+                right_align={2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
             ),
             "",
             "By model:",
             _render_table(
-                headers=["Model", "Method", "Total", "Est.$", "Prompt", "Output", "Cached Prompt", "Reasoning", "Unsplit", "Credits", "Records"],
+                headers=["Model", "Method", "Total", "API Est.$", "Allocated $", "Billable $", "Prompt", "Output", "Cached Prompt", "Reasoning", "Unsplit", "Credits", "Records"],
                 rows=[
                     [
                         row["model_label"],
                         row["method"],
                         format_int(row["total_tokens"]),
                         format_float(row["estimated_cost_usd"]),
+                        format_float(row["allocated_cost_usd"]),
+                        format_float(row["billable_cost_usd"]),
                         format_int(row["input_tokens"]),
                         format_int(row["output_tokens"]),
                         format_int(row["cached_input_tokens"]),
@@ -1030,7 +1072,7 @@ def render_range_report(conn: sqlite3.Connection, last_days: int, tz, *, json_mo
                     ]
                     for row in by_model
                 ],
-                right_align={2, 3, 4, 5, 6, 7, 8, 9, 10},
+                right_align={2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
             ),
         ]
     )
@@ -1233,7 +1275,7 @@ def render_pricing_report(*, json_mode: bool) -> str:
                 "override_loaded": resolution.override_loaded,
                 "override_error": resolution.override_error,
                 "notes": {
-                    "estimate_column": "Est.$ is a local estimate, not vendor billing.",
+                    "estimate_column": "API Est.$ is a local API-equivalent estimate, not vendor billing.",
                     "unit": "USD per 1M tokens",
                 },
             },
@@ -1243,9 +1285,9 @@ def render_pricing_report(*, json_mode: bool) -> str:
 
     return "\n".join(
         [
-            "Pricing profiles for Est.$",
+            "Pricing profiles for API Est.$",
             "",
-            "Local estimate only. Unit: USD per 1M tokens.",
+            "Local API-equivalent estimate only. Unit: USD per 1M tokens.",
             (
                 f"Override file: {resolution.override_path} "
                 f"({'loaded' if resolution.override_loaded else 'not loaded'})"
@@ -1274,6 +1316,81 @@ def render_pricing_report(*, json_mode: bool) -> str:
             ),
         ]
     )
+
+
+def render_billing_report(*, json_mode: bool) -> str:
+    resolution = resolve_billing_config()
+    rows = [
+        {
+            "profile": profile.key,
+            "name": profile.name,
+            "mode": profile.mode,
+            "monthly_usd": profile.monthly_usd,
+            "cycle_start_day": profile.cycle_start_day,
+            "match_app": profile.match_app,
+            "match_source": profile.match_source,
+        }
+        for profile in resolution.profiles
+    ]
+    if json_mode:
+        return json.dumps(
+            {
+                "profiles": rows,
+                "path": str(resolution.path),
+                "loaded": resolution.loaded,
+                "error": resolution.error,
+                "notes": {
+                    "api": "Billable $ equals API Est.$.",
+                    "subscription": "Allocated $ is monthly_usd weighted by API-equivalent cost within the billing cycle.",
+                    "credits": "Dollar billable cost is left blank; vendor credits remain separate.",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    lines = [
+        "Billing profiles",
+        "",
+        f"Billing file: {resolution.path} ({'loaded' if resolution.loaded else 'not loaded'})",
+    ]
+    if resolution.error:
+        lines.append(f"Billing config error: {resolution.error}")
+    lines.extend(
+        [
+            "Modes: api = API Est.$, subscription = monthly fee allocation, credits = keep vendor credits separate.",
+            "",
+        ]
+    )
+    if not rows:
+        lines.extend(
+            [
+                "(no billing profiles configured; Billable $ defaults to API Est.$)",
+                "",
+                "Create a starter config with: tokkit billing init",
+            ]
+        )
+        return "\n".join(lines)
+
+    lines.append(
+        _render_table(
+            headers=["Profile", "Name", "Mode", "Monthly $", "Cycle Day", "Match App", "Match Source"],
+            rows=[
+                [
+                    row["profile"],
+                    row["name"],
+                    row["mode"],
+                    format_float(row["monthly_usd"]),
+                    str(row["cycle_start_day"]),
+                    row["match_app"] or "-",
+                    row["match_source"] or "-",
+                ]
+                for row in rows
+            ],
+            right_align={3, 4},
+        )
+    )
+    return "\n".join(lines)
 
 
 def render_budget_report(conn: sqlite3.Connection, tz, *, json_mode: bool) -> str:
@@ -1328,7 +1445,8 @@ def render_budget_report(conn: sqlite3.Connection, tz, *, json_mode: bool) -> st
                 headers=[
                     "Window",
                     "Total",
-                    "Est.$",
+                    "Billable $",
+                    "API Est.$",
                     "Budget $",
                     "USD %",
                     "Credits",
@@ -1340,7 +1458,8 @@ def render_budget_report(conn: sqlite3.Connection, tz, *, json_mode: bool) -> st
                     [
                         row["window"],
                         format_int(row["total_tokens"]),
-                        format_float(row["estimated_cost_usd"]),
+                        format_float(row["billable_cost_usd"]),
+                        format_float(row["api_estimated_cost_usd"]),
                         format_float(row["est_budget"]),
                         row["est_pct_label"],
                         format_float(row["credits"]),
@@ -1350,7 +1469,7 @@ def render_budget_report(conn: sqlite3.Connection, tz, *, json_mode: bool) -> st
                     ]
                     for row in window_rows
                 ],
-                right_align={1, 2, 3, 5, 6},
+                right_align={1, 2, 3, 4, 6, 7},
             ),
         ]
     )
@@ -1830,6 +1949,7 @@ def _budget_window_row(
         conn.execute(
             """
             SELECT
+                local_date,
                 app,
                 source,
                 measurement_method,
@@ -1844,20 +1964,24 @@ def _budget_window_row(
                 COUNT(*) AS records
             FROM usage_records
             WHERE local_date >= ? AND local_date <= ?
-            GROUP BY app, source, measurement_method, model, model_provider
+            GROUP BY local_date, app, source, measurement_method, model, model_provider
             """,
             (start_date, end_date),
-        ).fetchall()
+        ).fetchall(),
+        conn=conn,
     )
-    estimated_cost = _sum_estimated_cost(detailed_rows)
-    est_pct = _ratio(estimated_cost, est_budget)
+    api_estimated_cost = _sum_estimated_cost(detailed_rows)
+    billable_cost = _sum_cost(detailed_rows, "billable_cost_usd")
+    est_pct = _ratio(billable_cost, est_budget)
     credits_pct = _ratio(float(totals["credits"]), credits_budget)
     return {
         "window": label,
         "start_date": start_date,
         "end_date": end_date,
         "total_tokens": int(totals["total_tokens"]),
-        "estimated_cost_usd": estimated_cost,
+        "estimated_cost_usd": billable_cost,
+        "api_estimated_cost_usd": api_estimated_cost,
+        "billable_cost_usd": billable_cost,
         "est_budget": est_budget,
         "est_pct": est_pct,
         "est_pct_label": _format_ratio(est_pct),
@@ -2332,6 +2456,7 @@ def _aggregate_hourly_usage_rows(conn: sqlite3.Connection, target_date: str, tz)
             """
             SELECT
                 started_at,
+                local_date,
                 app,
                 source,
                 measurement_method,
@@ -2349,7 +2474,8 @@ def _aggregate_hourly_usage_rows(conn: sqlite3.Connection, target_date: str, tz)
             ORDER BY started_at ASC
             """,
             (target_date,),
-        ).fetchall()
+        ).fetchall(),
+        conn=conn,
     )
     for row in raw_rows:
         row["hour_label"] = parse_timestamp(str(row["started_at"])).astimezone(tz).strftime("%H:00")
@@ -2376,6 +2502,7 @@ def _aggregate_usage_rows(
             {
                 **{field: key_values[idx] for idx, field in enumerate(key_fields)},
                 "methods": set(),
+                "billing_modes": set(),
                 "input_tokens": 0,
                 "output_tokens": 0,
                 "cached_input_tokens": 0,
@@ -2385,7 +2512,11 @@ def _aggregate_usage_rows(
                 "credits": 0.0,
                 "records": 0,
                 "estimated_cost_usd": 0.0,
+                "allocated_cost_usd": 0.0,
+                "billable_cost_usd": 0.0,
                 "estimated_cost_present": False,
+                "allocated_cost_present": False,
+                "billable_cost_present": False,
                 "input_present": False,
                 "output_present": False,
                 "cached_present": False,
@@ -2393,6 +2524,9 @@ def _aggregate_usage_rows(
             },
         )
         bucket["methods"].add(str(row["measurement_method"]))
+        billing_mode = row.get("billing_mode") if isinstance(row, dict) else None
+        if billing_mode:
+            bucket["billing_modes"].add(str(billing_mode))
         if row["input_tokens"] is not None:
             bucket["input_tokens"] = int(bucket["input_tokens"]) + int(row["input_tokens"])
             bucket["input_present"] = True
@@ -2413,12 +2547,23 @@ def _aggregate_usage_rows(
         if estimated_cost is not None:
             bucket["estimated_cost_usd"] = float(bucket["estimated_cost_usd"]) + float(estimated_cost)
             bucket["estimated_cost_present"] = True
+        allocated_cost = row.get("allocated_cost_usd") if isinstance(row, dict) else None
+        if allocated_cost is not None:
+            bucket["allocated_cost_usd"] = float(bucket["allocated_cost_usd"]) + float(allocated_cost)
+            bucket["allocated_cost_present"] = True
+        billable_cost = row.get("billable_cost_usd") if isinstance(row, dict) else None
+        if billable_cost is not None:
+            bucket["billable_cost_usd"] = float(bucket["billable_cost_usd"]) + float(billable_cost)
+            bucket["billable_cost_present"] = True
 
     aggregated = list(grouped.values())
     for row in aggregated:
         row["method"] = _format_measurement_methods(row.pop("methods"))
+        row["billing_mode"] = _format_measurement_methods(row.pop("billing_modes"))
         row["credits"] = round(float(row["credits"]), 8)
         estimated_cost_present = bool(row.pop("estimated_cost_present"))
+        allocated_cost_present = bool(row.pop("allocated_cost_present"))
+        billable_cost_present = bool(row.pop("billable_cost_present"))
         input_present = bool(row.pop("input_present"))
         output_present = bool(row.pop("output_present"))
         cached_present = bool(row.pop("cached_present"))
@@ -2435,6 +2580,14 @@ def _aggregate_usage_rows(
             row["estimated_cost_usd"] = round(float(row["estimated_cost_usd"]), 8)
         else:
             row["estimated_cost_usd"] = None
+        if allocated_cost_present:
+            row["allocated_cost_usd"] = round(float(row["allocated_cost_usd"]), 8)
+        else:
+            row["allocated_cost_usd"] = None
+        if billable_cost_present:
+            row["billable_cost_usd"] = round(float(row["billable_cost_usd"]), 8)
+        else:
+            row["billable_cost_usd"] = None
     aggregated.sort(key=sort_key)
     return aggregated
 
@@ -2506,8 +2659,9 @@ def _model_label(model: str | None, provider: str | None) -> str:
     return normalize_model_display(model, provider)
 
 
-def _enrich_usage_rows(rows: Iterable[sqlite3.Row]) -> list[dict[str, object]]:
+def _enrich_usage_rows(rows: Iterable[sqlite3.Row], *, conn: sqlite3.Connection | None = None) -> list[dict[str, object]]:
     pricing_resolution = resolve_price_book()
+    billing_allocator = BillingCostAllocator(conn, pricing_resolution) if conn is not None else None
     enriched: list[dict[str, object]] = []
     for row in rows:
         item = dict(row)
@@ -2522,15 +2676,27 @@ def _enrich_usage_rows(rows: Iterable[sqlite3.Row]) -> list[dict[str, object]]:
             output_tokens=int(item.get("output_tokens") or 0),
             pricing_resolution=pricing_resolution,
         )
+        if billing_allocator is not None:
+            billing_allocator.enrich(item)
+        else:
+            item["billing_mode"] = "api"
+            item["billing_profile"] = "API"
+            item["billing_cycle"] = None
+            item["allocated_cost_usd"] = None
+            item["billable_cost_usd"] = item["estimated_cost_usd"]
         enriched.append(item)
     return enriched
 
 
 def _sum_estimated_cost(rows: Iterable[dict[str, object]]) -> float | None:
+    return _sum_cost(rows, "estimated_cost_usd")
+
+
+def _sum_cost(rows: Iterable[dict[str, object]], field: str) -> float | None:
     total = 0.0
     present = False
     for row in rows:
-        value = row.get("estimated_cost_usd")
+        value = row.get(field)
         if value is None:
             continue
         total += float(value)
