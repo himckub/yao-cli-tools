@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import sqlite3
 import subprocess
@@ -73,6 +74,7 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("function renderDashboard", rendered)
         self.assertIn("function lineChart", rendered)
         self.assertIn("--module-gap: 16px", rendered)
+        self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr))", rendered)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", rendered)
         self.assertIn(".chart-grid > .panel", rendered)
         self.assertNotIn("0.9fr", rendered)
@@ -124,6 +126,7 @@ class HtmlReportTests(unittest.TestCase):
                 patch("tokkit.tok._report_dir", return_value=report_dir),
                 patch("tokkit.tok._auto_html_today_string", return_value="2026-05-03"),
                 patch("tokkit.tok.subprocess.run", side_effect=fake_run),
+                patch("tokkit.tok.sys.stderr", new_callable=io.StringIO) as stderr,
             ):
                 first_status = _refresh_daily_html_report_if_needed()
                 second_status = _refresh_daily_html_report_if_needed()
@@ -136,6 +139,7 @@ class HtmlReportTests(unittest.TestCase):
         self.assertIn("14", calls[0])
         self.assertIn("--output", calls[0])
         self.assertIn(str(expected_path), calls[0])
+        self.assertIn(f"tok: daily HTML report updated: {expected_path}", stderr.getvalue())
 
     def test_daily_html_report_can_be_disabled(self) -> None:
         with patch.dict(os.environ, {"TOK_AUTO_HTML_REPORT": "0"}):

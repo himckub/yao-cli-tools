@@ -65,8 +65,9 @@ TokKit 的核心流程是本地优先的数据管道：
 3. **归一化记录**：把所有 usage 写入 `~/.tokkit/usage.sqlite`，统一记录
    source、app、model、terminal/client 线索、token 字段、method、时间和
    metadata。
-4. **本地估价**：使用内置价格表和可选的 `~/.tokkit/pricing.json` 覆盖文件
-   计算 `Est.$`。
+4. **本地计费估算**：使用内置价格表、可选的 `~/.tokkit/pricing.json` 覆盖文件
+   和 `~/.tokkit/billing.json` 订阅配置，分别计算 `API Est.$`、
+   `Allocated $` 和 `Billable $`。
 5. **生成报表**：输出终端表格、JSON、客户端覆盖率、预算视图和静态交互式
    HTML 仪表盘。
 
@@ -85,7 +86,7 @@ TokKit 的核心流程是本地优先的数据管道：
 - 默认不需要托管后台，数据留在本机。
 - 明确区分 `exact`、`partial` 和 `estimated`，不混淆精度。
 - 支持按日期、来源、终端、客户端、模型、Prompt、Output、Cached Prompt、
-  Reasoning、Unsplit、预估美元、Credits、Records 聚合。
+  Reasoning、Unsplit、API 估价、订阅分摊、最终计费、Credits、Records 聚合。
 - 交互式 HTML 报告默认简体中文，支持英文切换、置顶导航、时间范围切换、
   模型筛选和图表 tooltip。
 - 增量扫描和活跃目标规划，让重复统计更快。
@@ -95,6 +96,21 @@ TokKit 的核心流程是本地优先的数据管道：
 - macOS 可选 `launchd` 自动扫描和自动日报。
 - Augment 支持历史本地估算，也支持对新请求做运行时精确 capture。
 - 支持 JSON 输出，方便脚本和后续分析。
+
+## 能力边界
+
+- TokKit 是本地 AI Token 台账和用量分析工具，不替代 OpenAI、Anthropic、xAI
+  或其他供应商的官方账单。
+- `API Est.$` 按模型 token 与 API 价格估算理论 API 成本；订阅账号通常不应把它
+  当作真实扣费。
+- `Allocated $` 和 `Billable $` 依赖 `~/.tokkit/billing.json` 的订阅周期、
+  月费和来源匹配规则；未配置订阅时会回退到 API 估价口径。
+- 只有 total-only、credits 或缺少模型价格的记录会保留为 partial/unsplit，
+  不能可靠拆分为 Prompt、Output 或 Cached Prompt 成本。
+- HTML 报告和导出的 JSON 可能包含本地应用、模型、项目路径或 prompt 相关元数据，
+  对外分享前应先检查内容。
+- 每天首次执行报表或扫描命令会自动生成最近 30 天 HTML 报告，并把报告路径输出到
+  终端 stderr；需要强制刷新时使用 `tok html`。
 
 ## 支持的数据来源
 
@@ -226,8 +242,8 @@ tok html open
 ```
 
 HTML 报告会生成在 `~/.tokkit/reports/`，是静态文件，可以本地打开、作为
-artifact 分享，或用于演示。普通报表或扫描命令每天首次执行时，也会自动静默生成一份
-最近 30 天 HTML 报告；手动执行 `tok html` 会立即重新生成。
+artifact 分享，或用于演示。普通报表或扫描命令每天首次执行时，也会自动生成一份
+最近 30 天 HTML 报告，并在终端 stderr 输出报告路径；手动执行 `tok html` 会立即重新生成。
 
 自动 HTML 报告可以通过环境变量调整：
 
@@ -440,6 +456,7 @@ all, codex, claude-code, augment, chatgpt, copilot, warp, codebuddy, cursor, tra
 TokKit 面向个人本地用量台账，不替代供应商账单后台。
 
 - 数据默认保存在本地。
+- 费用字段是本地算法估算，订阅均摊准确度取决于 `billing.json` 配置。
 - 官方导出和本地日志可能包含私有 prompt 或文件上下文。
 - 分享报告前应先检查内容。
 - `estimated` 更适合趋势分析，不适合对账。

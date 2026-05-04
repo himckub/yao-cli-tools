@@ -351,8 +351,8 @@ h1 {
 }
 .metrics {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--module-gap);
   margin-bottom: 16px;
 }
 .metric,
@@ -364,7 +364,8 @@ h1 {
 }
 .metric {
   min-width: 0;
-  padding: 15px;
+  min-height: 132px;
+  padding: 17px 18px;
 }
 .metric span,
 .control-label {
@@ -378,10 +379,12 @@ h1 {
   margin: 7px 0 4px;
   color: var(--brand);
   font-family: "Songti SC", "Noto Serif CJK SC", Georgia, serif;
-  font-size: clamp(22px, 2.4vw, 31px);
+  font-size: clamp(26px, 2.45vw, 38px);
   font-weight: 500;
-  line-height: 1.1;
-  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1.04;
+  overflow-wrap: break-word;
 }
 .metric small {
   color: var(--stone);

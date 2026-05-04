@@ -66,8 +66,10 @@ TokKit follows a local-first pipeline:
 3. **Normalize records**: store all usage rows in `~/.tokkit/usage.sqlite` with
    source, app, model, terminal/client hints, token fields, method, timestamp,
    and metadata.
-4. **Estimate cost locally**: apply built-in pricing profiles and optional
-   overrides from `~/.tokkit/pricing.json`.
+4. **Estimate billing locally**: apply built-in pricing profiles, optional
+   overrides from `~/.tokkit/pricing.json`, and subscription allocation rules
+   from `~/.tokkit/billing.json` to calculate `API Est.$`, `Allocated $`, and
+   `Billable $`.
 5. **Render reports**: produce terminal tables, JSON, client coverage reports,
    budget views, and static interactive HTML dashboards.
 
@@ -86,8 +88,8 @@ TokKit also keeps compatibility with older `~/.tokstat` paths where practical.
 - No hosted dashboard required; data stays on your machine by default.
 - Exact, partial, and estimated usage are explicitly separated.
 - Reports by date, source, terminal, client, model, prompt, output, cached
-  prompt, reasoning tokens, unsplit totals, estimated dollars, credits, and
-  records.
+  prompt, reasoning tokens, unsplit totals, API-equivalent estimates,
+  subscription allocation, final billable cost, credits, and records.
 - Interactive HTML report with Simplified Chinese by default, English toggle,
   sticky navigation, range switching, model filters, and chart tooltips.
 - Incremental scanning and active-target planning keep repeated reports fast.
@@ -98,6 +100,24 @@ TokKit also keeps compatibility with older `~/.tokstat` paths where practical.
 - Augment runtime capture hook for exact usage on new requests, plus historical
   local estimates.
 - JSON output for scripting and downstream analysis.
+
+## Capability Boundaries
+
+- TokKit is a local AI token ledger and usage analysis tool, not a replacement
+  for official billing dashboards from OpenAI, Anthropic, xAI, or other
+  providers.
+- `API Est.$` estimates theoretical API-equivalent cost from model token usage;
+  subscription accounts should not treat it as real spend.
+- `Allocated $` and `Billable $` depend on the subscription cycle, monthly fee,
+  and source matching rules in `~/.tokkit/billing.json`; without a subscription
+  profile, TokKit falls back to the API estimate.
+- Total-only, credits-only, or missing-price records remain partial/unsplit and
+  cannot be reliably decomposed into prompt, output, or cached prompt cost.
+- HTML reports and JSON exports may include local app, model, project path, or
+  prompt-related metadata; review them before sharing externally.
+- The first report or scan command each day automatically generates a
+  last-30-days HTML report and prints its path to terminal stderr; use `tok html`
+  when you need a forced refresh.
 
 ## Supported Sources
 
@@ -234,9 +254,9 @@ tok html open
 
 Generated HTML reports are static files under `~/.tokkit/reports/`. They can be
 opened locally, shared as artifacts, or used as a starting point for demos. The
-first regular report or scan command each day also writes a silent last-30-days
-HTML report automatically. Run `tok html` when you want to regenerate it
-manually.
+first regular report or scan command each day also writes a last-30-days HTML
+report automatically and prints the report path to terminal stderr. Run
+`tok html` when you want to regenerate it manually.
 
 Daily automatic HTML generation can be configured with environment variables:
 
@@ -456,6 +476,8 @@ TokKit is designed for local personal accounting. It is not a replacement for
 provider billing dashboards.
 
 - Data stays local by default.
+- Cost fields are local estimates; subscription allocation accuracy depends on
+  the `billing.json` configuration.
 - Official exports and local logs may contain private prompts or file context.
 - Share generated reports only after reviewing what they contain.
 - Estimated sources are useful for trend tracking, not invoice reconciliation.

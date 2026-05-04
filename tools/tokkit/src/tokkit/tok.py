@@ -88,8 +88,8 @@ Auto scan / 自动扫描:
   TOK_AUTO_SCAN_TARGET=all|codex|claude-code|augment|chatgpt|copilot|warp|codebuddy|cursor|trae  choose scan target / 指定扫描目标
 
 Auto HTML report / 自动 HTML 报告:
-  first report or scan command each day silently writes ~/.tokkit/reports/tokkit-last-30-YYYY-MM-DD.html
-  每天首次执行报表或扫描命令时，会静默生成最近 30 天 HTML 报告
+  first report or scan command each day writes ~/.tokkit/reports/tokkit-last-30-YYYY-MM-DD.html and prints the path
+  每天首次执行报表或扫描命令时，会生成最近 30 天 HTML 报告并输出路径
   TOK_AUTO_HTML_REPORT=0       disable daily HTML generation / 关闭每日自动 HTML
   TOK_AUTO_HTML_LAST_DAYS=30   choose auto report window / 指定自动报告天数
 """
@@ -385,6 +385,8 @@ def _refresh_daily_html_report_if_needed() -> int:
             output = temp_path.read_text(encoding="utf-8")
             if output.strip():
                 print(output, file=sys.stderr, end="" if output.endswith("\n") else "\n")
+        else:
+            print(f"tok: daily HTML report updated: {output_path}", file=sys.stderr)
         return 0
     finally:
         temp_path.unlink(missing_ok=True)
