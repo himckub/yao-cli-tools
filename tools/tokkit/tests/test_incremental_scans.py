@@ -326,6 +326,54 @@ class IncrementalScanTests(unittest.TestCase):
         self.assertEqual(rows[0]["output_tokens"], 20)
         self.assertEqual(rows[0]["total_tokens"], 230)
 
+    def test_claude_scan_writes_anthropic_provider_metadata(self) -> None:
+        # yaojingang/yao-cli-tools#2 follow-up: Claude Code only talks to
+        # Anthropic, so ingest must stamp model_provider='anthropic' on every
+        # record. pricing.estimate_cost_usd() then has a stable, ingest-time
+        # signal for the disjoint cached_input_tokens algorithm instead of
+        # depending on the "Claude " model-name prefix as a fallback.
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_db(conn)
+        tz = ZoneInfo("Asia/Shanghai")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            claude_home = Path(tmp)
+            session_file = claude_home / "projects" / "demo" / "session-1.jsonl"
+            session_file.parent.mkdir(parents=True, exist_ok=True)
+            session_file.write_text(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "timestamp": "2026-05-04T09:00:00+08:00",
+                        "cwd": "/tmp/project",
+                        "entrypoint": "cli",
+                        "uuid": "evt-1",
+                        "message": {
+                            "id": "msg-1",
+                            "model": "claude-opus-4-7-20260416",
+                            "type": "assistant",
+                            "usage": {
+                                "input_tokens": 100,
+                                "cache_read_input_tokens": 40,
+                                "output_tokens": 10,
+                            },
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            scan_claude_code(conn, claude_home=claude_home, tz=tz)
+
+        row = conn.execute(
+            "SELECT json_extract(metadata_json, '$.model_provider') AS provider "
+            "FROM usage_records WHERE app = 'claude-code'"
+        ).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["provider"], "anthropic")
+
     def test_augment_history_reuses_checkpoint_cache_after_first_scan(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row

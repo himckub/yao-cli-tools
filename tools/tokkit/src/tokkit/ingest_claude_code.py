@@ -195,6 +195,7 @@ def _scan_session_file(
                         "message_type": message.get("type"),
                         "claude_version": event.get("version"),
                         "git_branch": event.get("gitBranch"),
+                        "model_provider": "anthropic",
                     },
                 }
 
