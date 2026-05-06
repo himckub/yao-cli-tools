@@ -76,6 +76,21 @@ def get_timezone(name: str | None = None) -> ZoneInfo:
     local_tz = datetime.now().astimezone().tzinfo
     if isinstance(local_tz, ZoneInfo):
         return local_tz
+
+    # On Unix-like systems, `/etc/localtime` is a symlink into the IANA
+    # zoneinfo tree (e.g. `/var/db/timezone/zoneinfo/Asia/Shanghai` on macOS,
+    # `/usr/share/zoneinfo/Europe/Berlin` on Linux). Reading the symlink is
+    # more reliable than `tzname()` — on macOS `tzname()` returns
+    # abbreviations like "CST" / "PDT" that aren't valid IANA names, so
+    # `ZoneInfo("CST")` raises `ZoneInfoNotFoundError` and the original
+    # fallback below would silently swallow it into UTC.
+    iana_from_link = _read_iana_from_localtime_symlink()
+    if iana_from_link is not None:
+        try:
+            return ZoneInfo(iana_from_link)
+        except Exception:
+            pass
+
     local_name = getattr(local_tz, "key", None) or datetime.now().astimezone().tzname()
     if not local_name:
         return ZoneInfo("UTC")
@@ -83,6 +98,19 @@ def get_timezone(name: str | None = None) -> ZoneInfo:
         return ZoneInfo(local_name)
     except Exception:
         return ZoneInfo("UTC")
+
+
+def _read_iana_from_localtime_symlink() -> str | None:
+    try:
+        target = os.readlink("/etc/localtime")
+    except OSError:
+        return None
+    marker = "zoneinfo/"
+    idx = target.rfind(marker)
+    if idx < 0:
+        return None
+    name = target[idx + len(marker):].strip("/").strip()
+    return name or None
 
 
 def parse_timestamp(value: str, *, naive_tz: ZoneInfo | None = None) -> datetime:
