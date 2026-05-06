@@ -67,6 +67,26 @@ class GetTimezoneTests(unittest.TestCase):
             tz = get_timezone()
         self.assertEqual(tz, ZoneInfo("Asia/Shanghai"))
 
+    def test_invalid_localtime_iana_name_continues_to_fallback(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        fake_now = datetime(
+            2026, 5, 6, 10, 0, 0,
+            tzinfo=timezone(timedelta(hours=8), "NotAnIanaZone"),
+        )
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[override]
+                return fake_now if tz is None else fake_now.astimezone(tz)
+
+        with patch("tokkit.utils.datetime", _FrozenDatetime), patch(
+            "tokkit.utils.os.readlink",
+            return_value="/var/db/timezone/zoneinfo/Definitely/NotAZone",
+        ):
+            tz = get_timezone()
+        self.assertEqual(tz, ZoneInfo("UTC"))
+
 
 if __name__ == "__main__":
     unittest.main()

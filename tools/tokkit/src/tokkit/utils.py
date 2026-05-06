@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 DEFAULT_HOME_DIR_NAME = ".tokkit"
@@ -88,7 +88,7 @@ def get_timezone(name: str | None = None) -> ZoneInfo:
     if iana_from_link is not None:
         try:
             return ZoneInfo(iana_from_link)
-        except Exception:
+        except ZoneInfoNotFoundError:
             pass
 
     local_name = getattr(local_tz, "key", None) or datetime.now().astimezone().tzname()
