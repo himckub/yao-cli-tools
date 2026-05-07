@@ -17,7 +17,13 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from tokkit.cli import render_html_report
 from tokkit.db import UsageRecord, init_db, upsert_usage_record
-from tokkit.tok import _refresh_daily_html_report_if_needed, _run_billing_command, _run_html_command, _run_scan_command
+from tokkit.tok import (
+    _refresh_daily_html_report_if_needed,
+    _run_billing_command,
+    _run_html_command,
+    _run_report,
+    _run_scan_command,
+)
 
 
 class HtmlReportTests(unittest.TestCase):
@@ -150,15 +156,58 @@ class HtmlReportTests(unittest.TestCase):
         run.assert_not_called()
 
     def test_manual_scan_refreshes_daily_html_after_success(self) -> None:
+        proc = subprocess.CompletedProcess(
+            ["scan-codex"],
+            0,
+            stdout="codex scan complete: files=1 records=2\n",
+            stderr="",
+        )
         with (
-            patch("tokkit.tok._run_tokkit", return_value=0) as run_tokkit,
+            patch("tokkit.tok._run_tokkit_capture", return_value=proc) as run_tokkit,
             patch("tokkit.tok._refresh_daily_html_report_if_needed", return_value=0) as refresh,
+            patch(
+                "tokkit.tok._print_daily_html_report_notice",
+                side_effect=lambda: print("Daily HTML report: file:///tmp/tokkit.html"),
+            ) as notice,
+            patch("tokkit.tok.sys.stdout", new_callable=io.StringIO) as stdout,
         ):
             status = _run_scan_command(["codex"])
 
         self.assertEqual(status, 0)
         run_tokkit.assert_called_once_with(["scan-codex"])
-        refresh.assert_called_once_with()
+        refresh.assert_called_once_with(announce=False)
+        notice.assert_called_once_with()
+        self.assertTrue(stdout.getvalue().startswith("Daily HTML report: file:///tmp/tokkit.html\n"))
+        self.assertIn("codex scan complete: files=1 records=2", stdout.getvalue())
+
+    def test_text_report_prints_daily_html_notice_before_report(self) -> None:
+        order: list[str] = []
+        with (
+            patch("tokkit.tok._run_auto_scan_if_needed", return_value=0),
+            patch("tokkit.tok._refresh_daily_html_report_if_needed", return_value=0) as refresh,
+            patch("tokkit.tok._print_daily_html_report_notice", side_effect=lambda: order.append("notice")),
+            patch("tokkit.tok._run_tokkit", side_effect=lambda args: order.append("report") or 0) as run_tokkit,
+        ):
+            status = _run_report(["report-range", "--last", "7"])
+
+        self.assertEqual(status, 0)
+        refresh.assert_called_once_with(announce=False)
+        run_tokkit.assert_called_once_with(["report-range", "--last", "7"])
+        self.assertEqual(order, ["notice", "report"])
+
+    def test_json_report_does_not_print_daily_html_notice(self) -> None:
+        with (
+            patch("tokkit.tok._run_auto_scan_if_needed", return_value=0),
+            patch("tokkit.tok._refresh_daily_html_report_if_needed", return_value=0) as refresh,
+            patch("tokkit.tok._print_daily_html_report_notice") as notice,
+            patch("tokkit.tok._run_tokkit", return_value=0) as run_tokkit,
+        ):
+            status = _run_report(["report-range", "--last", "7", "--json"])
+
+        self.assertEqual(status, 0)
+        refresh.assert_called_once_with(announce=False)
+        notice.assert_not_called()
+        run_tokkit.assert_called_once_with(["report-range", "--last", "7", "--json"])
 
 
 if __name__ == "__main__":

@@ -90,6 +90,8 @@ Auto scan / 自动扫描:
 Auto HTML report / 自动 HTML 报告:
   first report or scan command each day writes ~/.tokkit/reports/tokkit-last-30-YYYY-MM-DD.html and prints the path
   每天首次执行报表或扫描命令时，会生成最近 30 天 HTML 报告并输出路径
+  text reports and manual scans print the daily HTML report address as their first output line
+  文本报表和手动扫描会把当天 HTML 日报地址作为第一行输出
   TOK_AUTO_HTML_REPORT=0       disable daily HTML generation / 关闭每日自动 HTML
   TOK_AUTO_HTML_LAST_DAYS=30   choose auto report window / 指定自动报告天数
 """
@@ -341,10 +343,12 @@ def _run_augment_command(args: list[str]) -> int:
 
 
 def _run_scan_and_refresh_report(args: list[str]) -> int:
-    status = _run_tokkit(args)
-    if status == 0:
-        _refresh_daily_html_report_if_needed()
-    return status
+    proc = _run_tokkit_capture(args)
+    if proc.returncode == 0:
+        _refresh_daily_html_report_if_needed(announce=False)
+        _print_daily_html_report_notice()
+    _emit_completed_process(proc)
+    return proc.returncode
 
 
 def _run_report(args: list[str]) -> int:
@@ -352,11 +356,13 @@ def _run_report(args: list[str]) -> int:
     if auto_scan_status != 0:
         return auto_scan_status
     if args[:1] != ["report-html"]:
-        _refresh_daily_html_report_if_needed()
+        _refresh_daily_html_report_if_needed(announce=False)
+        if "--json" not in args:
+            _print_daily_html_report_notice()
     return _run_tokkit(args)
 
 
-def _refresh_daily_html_report_if_needed() -> int:
+def _refresh_daily_html_report_if_needed(*, announce: bool = True) -> int:
     if os.environ.get("TOK_AUTO_HTML_REPORT", "1") != "1":
         return 0
 
@@ -385,11 +391,25 @@ def _refresh_daily_html_report_if_needed() -> int:
             output = temp_path.read_text(encoding="utf-8")
             if output.strip():
                 print(output, file=sys.stderr, end="" if output.endswith("\n") else "\n")
-        else:
+        elif announce:
             print(f"tok: daily HTML report updated: {output_path}", file=sys.stderr)
         return 0
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def _print_daily_html_report_notice() -> None:
+    if os.environ.get("TOK_AUTO_HTML_REPORT", "1") != "1":
+        return
+    path = _auto_html_report_path(_auto_html_last_days())
+    print(f"Daily HTML report: {_path_uri(path)}", flush=True)
+
+
+def _path_uri(path: Path) -> str:
+    try:
+        return path.expanduser().resolve().as_uri()
+    except ValueError:
+        return str(path)
 
 
 def _auto_html_last_days() -> int:
@@ -486,6 +506,24 @@ def _resolve_scan_target(target: str) -> tuple[list[str] | None, str]:
 
 def _run_tokkit(args: list[str]) -> int:
     return subprocess.run(_tokkit_command(args), check=False, env=_tokkit_env()).returncode
+
+
+def _run_tokkit_capture(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        _tokkit_command(args),
+        check=False,
+        env=_tokkit_env(),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _emit_completed_process(proc: subprocess.CompletedProcess[str]) -> None:
+    if proc.stdout:
+        print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
+    if proc.stderr:
+        print(proc.stderr, file=sys.stderr, end="" if proc.stderr.endswith("\n") else "\n")
 
 
 def _tokkit_command(args: list[str]) -> list[str]:
