@@ -1,6 +1,6 @@
 # yao-open-tools
 
-Yao 的开源小工具集合，面向本地优先的 AI 编码、开发者效率、终端诊断、网页截图、视频转写和磁盘空间分析等日常工作流。
+Yao 的开源小工具集合，面向本地优先的 AI 编码、开发者效率、终端诊断、网页截图、网页/PDF 翻译、视频转写和磁盘空间分析等日常工作流。
 
 这个仓库不是一个大而全的平台，也不是某个单一产品的源码仓库。它更像一个持续演进的工具箱：每个工具都尽量保持独立、轻量、可直接运行，并围绕一个明确问题提供可复用的命令行、浏览器扩展或本地工作台能力。
 
@@ -12,6 +12,7 @@ Yao 的开源小工具集合，面向本地优先的 AI 编码、开发者效率
 
 - AI 编码使用量、模型成本、终端来源和工具覆盖率的本地统计。
 - 浏览器页面截图、长页面留档、主体内容裁剪和多格式导出。
+- 浏览器网页和 PDF 的英译中辅助阅读、划词翻译、渐进式加载和本地缓存。
 - 视频下载、字幕提取、音频转写和基于 transcript 的 AI 报告生成。
 - 本机内存、GPU、软件活跃度和进程热点诊断。
 - 磁盘空间扫描、风险分类、可回收空间分析和安全清理计划。
@@ -25,6 +26,7 @@ Yao 的开源小工具集合，面向本地优先的 AI 编码、开发者效率
 | --- | --- | --- | --- |
 | [TokKit](tools/tokkit/README.md) | Python CLI | `tok` / `tokkit` | AI 编码工具使用量台账，统计 token、成本、模型、终端、客户端和来源覆盖率。 |
 | [tokscr](tools/tokscr/README.md) | Chrome MV3 扩展 | 浏览器插件 | 网页截图工具，支持完整页面、可见区域、选择区域、主体去噪、预览页二次裁剪和 PNG/JPEG/PDF/复制/打印导出。 |
+| [toktra](tools/toktra/README.md) | Chrome MV3 扩展 | 浏览器插件 | 网页和 PDF 英译中阅读插件，支持手动/站点/全局翻译模式、划词翻译、缓存、PDF 双栏阅读和本地 API 配置。 |
 | [vidbrief](tools/vidbrief/README.md) | Python CLI/TUI | `vb` | 视频下载、字幕或音频转写、Transcript 整理和 AI 报告生成。 |
 | [mem](tools/mem/README.md) | Python CLI/TUI | `mem` | 本机内存、GPU、软件活跃度和进程明细诊断。 |
 | [Scai](tools/yao-scai-cli/README.md) | Python CLI/TUI | `scai` | AI-native 磁盘空间扫描与清理建议工具，用于找大文件、分析风险和生成释放空间方案。 |
@@ -78,6 +80,29 @@ tok html month
 2. 开启“开发者模式”
 3. 点击“加载已解压的扩展程序”
 4. 选择 tools/tokscr/
+```
+
+### toktra
+
+`toktra` 是一个 Chrome MV3 英译中阅读扩展，适合阅读英文网页、技术文档、论文 PDF、博客和长文章。它不会直接覆盖原文，而是在原文附近渲染中文译文，并通过本地缓存减少重复翻译。
+
+它的核心能力包括：
+
+- 手动模式、仅当前网站自动翻译、所有网站自动翻译。
+- 网页正文、导航、侧栏、卡片和动态内容的渐进式翻译。
+- 划词翻译，选中英文后可在页面附近显示中文解释。
+- PDF 翻译视图，支持网页 PDF 和本地 `file://` PDF。
+- PDF 双栏阅读：左侧原 PDF，右侧译文页；译文页保留原 PDF 图层，并遮罩原文文本后叠加中文译文。
+- OpenAI-compatible API 配置，可使用自有 API Base URL、API Key 和模型。
+- 本地缓存译文，重复打开页面或 PDF 时减少 API 请求。
+
+本地加载方式：
+
+```text
+1. 打开 chrome://extensions/
+2. 开启“开发者模式”
+3. 点击“加载已解压的扩展程序”
+4. 选择 tools/toktra/extension/
 ```
 
 ### vidbrief
@@ -172,6 +197,7 @@ yao-open-tools/
     README.md
     tokkit/
     tokscr/
+    toktra/
     vidbrief/
     mem/
     yao-scai-cli/
@@ -199,13 +225,14 @@ cd yao-open-tools
 ls tools
 ```
 
-如果你只想看 AI 编码使用量，从 `tools/tokkit` 开始。如果你想截图网页，从 `tools/tokscr` 开始。如果你想处理视频 transcript，从 `tools/vidbrief` 开始。如果你想诊断本机内存，从 `tools/mem` 开始。如果你想找磁盘空间占用，从 `tools/yao-scai-cli` 开始。
+如果你只想看 AI 编码使用量，从 `tools/tokkit` 开始。如果你想截图网页，从 `tools/tokscr` 开始。如果你想翻译英文网页或 PDF，从 `tools/toktra` 开始。如果你想处理视频 transcript，从 `tools/vidbrief` 开始。如果你想诊断本机内存，从 `tools/mem` 开始。如果你想找磁盘空间占用，从 `tools/yao-scai-cli` 开始。
 
 ## 后续方向
 
 仓库后续会继续围绕实用、可分享、可本地运行的小工具扩展，重点包括：
 
 - `tok*` 系列工具，例如 token、日志、HTML 报告、终端工作流和本地数据整理。
+- 面向英文网页、PDF、长文档和浏览器阅读流的本地优先翻译辅助工具。
 - 面向 AI 编码工具的使用量、成本、质量和效率分析。
 - 本地文件、截图、视频、网页和日志的结构化处理。
 - 更清晰的工具发布规范、截图资产、隐私说明和测试覆盖。

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>toktra sample</title>
+</head>
+<body>
+  <main>
+    <h1>AI agents change software delivery</h1>
+    <p>Teams can review changes faster with structured automation.</p>
+    <ul>
+      <li>New content appended after load should be translated too.</li>
+    </ul>
+  </main>
+  <script>
+    setTimeout(() => {
+      const p = document.createElement("p");
+      p.textContent = "This paragraph was inserted dynamically after the page loaded.";
+      document.querySelector("main").appendChild(p);
+    }, 1200);
+  </script>
+</body>
+</html>

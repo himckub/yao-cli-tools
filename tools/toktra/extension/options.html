@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>toktra 设置</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="toktra-page">
+  <main class="settings-shell">
+    <header class="page-header">
+      <div>
+        <h1>toktra</h1>
+        <p>英文网页实时中文翻译设置</p>
+      </div>
+      <span id="status" class="status" data-tone="idle">未保存</span>
+    </header>
+
+    <form id="settingsForm" class="settings-form">
+      <section class="panel">
+        <h2>API</h2>
+        <label>
+          <span>API Base URL</span>
+          <input name="apiBaseUrl" type="url" placeholder="https://api.openai.com/v1">
+        </label>
+        <label>
+          <span>API Key</span>
+          <input name="apiKey" type="password" autocomplete="off" placeholder="sk-...">
+        </label>
+        <label>
+          <span>模型</span>
+          <input name="model" type="text" placeholder="gpt-4.1-mini">
+        </label>
+        <label>
+          <span>Temperature</span>
+          <input name="temperature" type="number" min="0" max="2" step="0.1">
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>翻译行为</h2>
+        <label class="check-row">
+          <input name="enabled" type="checkbox">
+          <span>启用 toktra</span>
+        </label>
+        <label>
+          <span>翻译模式</span>
+          <select name="translationMode">
+            <option value="manual">手动模式：不自动翻译，保留手动翻译和划线翻译</option>
+            <option value="site">仅指定网站自动翻译</option>
+            <option value="global">所有网站自动翻译</option>
+          </select>
+        </label>
+        <label class="check-row">
+          <input name="smartStructure" type="checkbox">
+          <span>首次访问域名时用 AI 智能识别网页结构</span>
+        </label>
+        <label class="check-row">
+          <input name="preciseTranslation" type="checkbox">
+          <span>启用 AI 精翻提示</span>
+        </label>
+        <label class="check-row">
+          <input name="selectionTranslation" type="checkbox">
+          <span>启用划词翻译</span>
+        </label>
+        <div class="inline-grid">
+          <label>
+            <span>原文语言</span>
+            <select name="sourceLanguage">
+              <option value="auto">自动检测</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <label>
+            <span>目标语言</span>
+            <select name="targetLanguage">
+              <option value="zh-CN">简体中文</option>
+              <option value="zh-TW">繁體中文</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="fr">Français</option>
+              <option value="es">Español</option>
+            </select>
+          </label>
+        </div>
+        <div class="inline-grid">
+          <label>
+            <span>最短文本</span>
+            <input name="minTextLength" type="number" min="4" max="200">
+          </label>
+          <label>
+            <span>最长文本</span>
+            <input name="maxTextLength" type="number" min="80" max="5000">
+          </label>
+          <label>
+            <span>批量大小</span>
+            <input name="batchSize" type="number" min="1" max="20">
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>域名</h2>
+        <label>
+          <span>自动翻译网站列表，每行一个</span>
+          <textarea name="allowDomains" rows="5" placeholder="example.com"></textarea>
+        </label>
+        <label>
+          <span>禁用域名，每行一个</span>
+          <textarea name="blockedDomains" rows="5" placeholder="mail.example.com"></textarea>
+        </label>
+        <label>
+          <span>站点翻译规则</span>
+          <textarea name="siteRules" rows="6" placeholder="tdwh.com##.promo&#10;tdwh.com#+#.ne-content"></textarea>
+        </label>
+      </section>
+
+      <section class="panel">
+        <h2>提示词</h2>
+        <label>
+          <span>系统提示词</span>
+          <textarea name="systemPrompt" rows="5"></textarea>
+        </label>
+      </section>
+
+      <footer class="form-actions">
+        <button type="submit">保存设置</button>
+        <button type="button" id="resetDefaults" class="secondary">恢复默认</button>
+      </footer>
+    </form>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

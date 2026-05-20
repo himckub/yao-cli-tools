@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>toktra PDF</title>
+  <link rel="stylesheet" href="pdf-viewer.css">
+</head>
+<body>
+  <header class="pdf-toolbar">
+    <div class="pdf-toolbar__brand">
+      <h1>toktra PDF</h1>
+      <p id="pdfSource">PDF 翻译视图</p>
+    </div>
+    <div class="pdf-toolbar__controls" aria-label="PDF 翻译设置">
+      <span class="pdf-toolbar__control">视图 <strong>原文 / 译文</strong></span>
+      <span class="pdf-toolbar__control">目标语言 <strong>简体中文</strong></span>
+      <button id="exportPdf" type="button" class="pdf-toolbar__button-secondary">导出中文 PDF</button>
+      <button id="refreshPdf" type="button">重新翻译</button>
+    </div>
+  </header>
+  <main class="pdf-reader">
+    <aside id="pdfPageRail" class="pdf-page-rail" aria-label="PDF 页面导航"></aside>
+    <section id="pdfPages" class="pdf-pages" aria-live="polite"></section>
+  </main>
+  <p id="pdfStatus" class="pdf-status">正在载入 PDF...</p>
+  <script src="core.js"></script>
+  <script src="pdf-viewer-core.js"></script>
+  <script type="module" src="pdf-viewer.js"></script>
+</body>
+</html>

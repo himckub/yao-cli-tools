@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>toktra screenshot</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      width: 1280px;
+      height: 800px;
+      overflow: hidden;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #222;
+      background: #f6f5f1;
+    }
+    .chrome {
+      height: 54px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 24px;
+      background: #ffffff;
+      border-bottom: 1px solid #e3e0d8;
+      color: #777;
+      font-size: 15px;
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; background: #d5d2cb; }
+    .bar {
+      flex: 1;
+      height: 30px;
+      border-radius: 16px;
+      background: #f0eee9;
+      padding: 6px 18px;
+    }
+    .page {
+      display: grid;
+      grid-template-columns: 1fr 330px;
+      gap: 34px;
+      width: 1180px;
+      margin: 34px auto 0;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid #e5e2da;
+    }
+    .logo {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      border-radius: 8px;
+      background: #2f7a59;
+      color: white;
+      font-weight: 800;
+      font-size: 28px;
+    }
+    .nav {
+      display: flex;
+      gap: 26px;
+      margin-left: 30px;
+      font-weight: 700;
+      color: #333;
+    }
+    .hero {
+      padding-top: 44px;
+    }
+    h1 {
+      margin: 0 0 18px;
+      max-width: 720px;
+      font-size: 48px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+    p {
+      margin: 0 0 18px;
+      max-width: 780px;
+      font-size: 22px;
+      line-height: 1.62;
+      color: #585858;
+    }
+    .translation {
+      max-width: 840px;
+      margin: 12px 0 22px;
+      padding: 14px 18px;
+      border-left: 4px solid #2f7a59;
+      background: #eaf5ef;
+      color: #245941;
+      font-size: 22px;
+      line-height: 1.55;
+      font-weight: 700;
+    }
+    .list-title {
+      margin-top: 54px;
+      padding-top: 26px;
+      border-top: 3px solid #222;
+      font-size: 30px;
+      font-weight: 800;
+    }
+    .side {
+      position: relative;
+      padding-top: 92px;
+    }
+    .panel {
+      border-top: 3px solid #222;
+      padding-top: 22px;
+    }
+    .panel h2 {
+      margin: 0 0 18px;
+      font-size: 30px;
+    }
+    .item {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 14px;
+      padding: 18px 0;
+      border-top: 1px solid #e1ded6;
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.35;
+    }
+    .num { color: #e2202b; }
+    .popup {
+      position: absolute;
+      top: 18px;
+      right: 10px;
+      width: 300px;
+      padding: 22px;
+      background: white;
+      border: 1px solid #dfddd5;
+      box-shadow: 0 18px 50px rgba(0,0,0,.16);
+    }
+    .popup h3 {
+      margin: 0 0 4px;
+      font-size: 34px;
+      color: #245941;
+    }
+    .popup .status {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      padding: 8px 14px;
+      border-radius: 20px;
+      background: #eaf5ef;
+      color: #245941;
+      font-weight: 800;
+    }
+    .button {
+      margin-top: 18px;
+      padding: 14px;
+      text-align: center;
+      color: white;
+      background: #2f7a59;
+      font-weight: 800;
+      font-size: 18px;
+      border-radius: 8px;
+    }
+    .hint {
+      margin-top: 12px;
+      color: #666;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <div class="chrome">
+    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+    <div class="bar">https://example.com/article</div>
+  </div>
+  <main class="page">
+    <section>
+      <div class="header">
+        <div class="logo">t</div>
+        <strong style="font-size: 28px;">TDWH</strong>
+        <nav class="nav"><span>Home</span><span>Reports</span><span>Insights</span><span>TrustData</span></nav>
+      </div>
+      <article class="hero">
+        <h1>How to Build Entity Authority for AI Search</h1>
+        <div class="translation">如何为 AI 搜索建立实体权威</div>
+        <p>Entity authority is the foundation of visibility in AI search. The strongest pages make their sources, claims, and context easy to verify.</p>
+        <div class="translation">实体权威是 AI 搜索可见性的基础。高质量页面会让来源、观点和上下文更容易被验证。</div>
+        <div class="list-title">Latest Articles</div>
+        <p style="margin-top: 22px;">Why AI Search Prefers Structured and Verifiable Content</p>
+        <div class="translation">为什么 AI 搜索更偏好结构化且可验证的内容</div>
+      </article>
+    </section>
+    <aside class="side">
+      <div class="popup">
+        <h3>toktra</h3>
+        <div class="status">启用</div>
+        <div style="color:#666;font-size:20px;">example.com</div>
+        <div class="button">翻译当前页</div>
+        <div class="hint">当前屏和后两屏优先翻译，滚动时继续补译。</div>
+      </div>
+      <div class="panel" style="margin-top: 290px;">
+        <h2>Latest</h2>
+        <div class="item"><span class="num">1</span><span>How Knowledge Graphs Matter for GEO Marketing</span></div>
+        <div class="item"><span class="num">2</span><span>Entities, Relationships, and Evidence</span></div>
+        <div class="item"><span class="num">3</span><span>How to Build a GEO Strategy</span></div>
+      </div>
+    </aside>
+  </main>
+</body>
+</html>
