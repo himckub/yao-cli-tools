@@ -1,0 +1,759 @@
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {
+  checksum,
+  buildManagedSlug,
+  composeDocument,
+  injectAssetBase,
+  injectTrackingCode,
+  isHtmlFile,
+  parentDirectoryNameFromPath,
+  parentDirectoryNameFromRelative,
+  parseHtmlMetadata,
+  removeEditBridge,
+} from './html.js';
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function displayTime(iso) {
+  if (!iso) return '-';
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(iso));
+}
+
+function rowToPage(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    slug: row.slug,
+    fileName: row.file_name,
+    title: row.title,
+    sourceType: row.source_type,
+    sourcePath: row.source_path,
+    directoryName: row.directory_name || '',
+    size: row.size,
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    uploadTime: displayTime(row.created_at),
+    updatedTime: displayTime(row.updated_at),
+    revision: row.revision,
+    generatedPath: row.generated_path,
+    rawMtimeMs: row.raw_mtime_ms,
+    checksum: row.checksum,
+    edited: Boolean(row.edited),
+    accessCount: row.access_count || 0,
+    deletedAt: row.deleted_at || '',
+    deletedTime: row.deleted_at ? displayTime(row.deleted_at) : '',
+    deletedPath: row.deleted_path || '',
+    url: `/pages/${row.slug}.html`,
+    editUrl: `/pages/${row.slug}.html?edit=1`,
+  };
+}
+
+function rowToWatchDir(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    path: row.path,
+    name: row.name,
+    source: row.name,
+    allowWrite: Boolean(row.allow_write),
+    status: row.status,
+    htmlCount: row.html_count,
+    lastScanAt: row.last_scan_at,
+    lastScan: row.last_scan_at ? displayTime(row.last_scan_at) : '等待扫描',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function cleanUploadPath(value, fallback = 'file') {
+  const source = String(value || fallback || 'file').replace(/\\/g, '/');
+  const parts = source
+    .split('/')
+    .map((part) => part.trim())
+    .filter((part) => part && part !== '.' && part !== '..')
+    .map((part) => part.replace(/[\u0000-\u001f<>:"|?*]/g, '_'));
+  if (parts.length) return parts.join('/');
+  return path.basename(fallback || 'file').replace(/[\u0000-\u001f<>:"|?*]/g, '_') || 'file';
+}
+
+function assetBaseUrl(uploadRootId, relativePath) {
+  const directory = path.posix.dirname(relativePath);
+  const segments = [uploadRootId];
+  if (directory && directory !== '.') segments.push(...directory.split('/').filter(Boolean));
+  return `/page-assets/${segments.map((segment) => encodeURIComponent(segment)).join('/')}/`;
+}
+
+function safeDestination(root, relativePath) {
+  const destination = path.join(root, ...relativePath.split('/'));
+  const resolvedRoot = path.resolve(root);
+  const resolvedDestination = path.resolve(destination);
+  if (resolvedDestination !== resolvedRoot && !resolvedDestination.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error('Invalid upload path');
+  }
+  return resolvedDestination;
+}
+
+const defaultAuthUsername = 'admin';
+const defaultAuthPassword = 'tokhtml';
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('base64url');
+  const hash = crypto.scryptSync(String(password), salt, 32).toString('base64url');
+  return `scrypt$${salt}$${hash}`;
+}
+
+function verifyPassword(password, encodedHash) {
+  const [, salt, hash] = String(encodedHash || '').split('$');
+  if (!salt || !hash) return false;
+  const expected = Buffer.from(hash, 'base64url');
+  const actual = crypto.scryptSync(String(password), salt, expected.length);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+function signSessionPayload(payload, authSettings) {
+  return crypto
+    .createHmac('sha256', `${authSettings.authSecret}:${authSettings.authPasswordHash}`)
+    .update(payload)
+    .digest('base64url');
+}
+
+export class PageStore {
+  constructor(config, db) {
+    this.config = config;
+    this.db = db;
+  }
+
+  async ensureStorage() {
+    await Promise.all([
+      fs.mkdir(this.config.uploadsDir, { recursive: true }),
+      fs.mkdir(this.config.generatedDir, { recursive: true }),
+      fs.mkdir(this.trashDir(), { recursive: true }),
+      fs.mkdir(this.config.versionsDir, { recursive: true }),
+    ]);
+  }
+
+  trashDir() {
+    return this.config.trashDir || path.join(this.config.dataDir, 'trash');
+  }
+
+  async seedConfiguredWatchDirs() {
+    for (const watchPath of this.config.watchDirs) {
+      await this.addWatchDir({
+        path: watchPath,
+        name: path.basename(watchPath),
+        allowWrite: this.config.allowSourceWrite,
+        createIfMissing: true,
+      });
+    }
+  }
+
+  listPages(filters = {}) {
+    const rows = this.db.prepare('SELECT * FROM pages ORDER BY updated_at DESC').all();
+    const q = String(filters.q || '').trim().toLowerCase();
+    const status = String(filters.status || 'all');
+    const directory = String(filters.directory || '').trim();
+    const scope = String(filters.scope || 'active');
+    const wantsTrash = scope === 'trash' || status === 'trashed';
+    return rows
+      .map(rowToPage)
+      .filter((page) => {
+        if (wantsTrash && !page.deletedAt) return false;
+        if (!wantsTrash && page.deletedAt) return false;
+        const matchesStatus =
+          wantsTrash ||
+          status === 'all' ||
+          !status ||
+          (status === 'published' && page.status === 'published') ||
+          (status === 'edited' && page.edited);
+        const matchesDirectory = !directory || page.directoryName === directory;
+        const haystack = `${page.id} ${page.slug} ${page.fileName} ${page.title} ${page.directoryName} ${page.url}`.toLowerCase();
+        return matchesStatus && matchesDirectory && (!q || haystack.includes(q));
+      });
+  }
+
+  listPagesPage(filters = {}) {
+    const allPages = this.listPages(filters);
+    const requestedPageSize = Number(filters.pageSize || 20);
+    const pageSize = Number.isFinite(requestedPageSize) ? Math.min(Math.max(Math.trunc(requestedPageSize), 1), 100) : 20;
+    const total = allPages.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const requestedPage = Number(filters.page || 1);
+    const page = Number.isFinite(requestedPage) ? Math.min(Math.max(Math.trunc(requestedPage), 1), totalPages) : 1;
+    const offset = (page - 1) * pageSize;
+    return {
+      pages: allPages.slice(offset, offset + pageSize),
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages,
+        offset,
+        hasPrev: page > 1,
+        hasNext: page < totalPages,
+      },
+    };
+  }
+
+  getPage(id) {
+    return rowToPage(this.db.prepare('SELECT * FROM pages WHERE id = ?').get(id));
+  }
+
+  getPageBySlug(slug) {
+    return rowToPage(this.db.prepare('SELECT * FROM pages WHERE slug = ?').get(slug));
+  }
+
+  getActivePageBySlug(slug) {
+    return rowToPage(this.db.prepare('SELECT * FROM pages WHERE slug = ? AND deleted_at IS NULL').get(slug));
+  }
+
+  async readPageHtml(page) {
+    return fs.readFile(page.generatedPath, 'utf8');
+  }
+
+  async importBuffer({ fileName, buffer, relativePath = '' }) {
+    const [page] = await this.importUploadFiles([{ fileName, buffer, relativePath }]);
+    return page;
+  }
+
+  async importUploadFiles(files = []) {
+    const normalized = files
+      .filter((file) => file?.buffer)
+      .map((file) => {
+        const relativePath = cleanUploadPath(file.relativePath || file.fileName, file.fileName || 'file');
+        return {
+          fileName: path.posix.basename(relativePath) || path.basename(file.fileName || 'file'),
+          relativePath,
+          buffer: file.buffer,
+        };
+      });
+    const htmlFiles = normalized.filter((file) => isHtmlFile(file.relativePath));
+    if (!htmlFiles.length) return [];
+
+    const uploadRootId = crypto.randomUUID();
+    const uploadRoot = path.join(this.config.uploadsDir, uploadRootId);
+    const hasFolderAssets = normalized.length > htmlFiles.length || normalized.some((file) => file.relativePath.includes('/'));
+    await fs.mkdir(uploadRoot, { recursive: true });
+
+    const stored = new Map();
+    for (const file of normalized) {
+      const destination = safeDestination(uploadRoot, file.relativePath);
+      await fs.mkdir(path.dirname(destination), { recursive: true });
+      await fs.writeFile(destination, file.buffer);
+      stored.set(file.relativePath, destination);
+    }
+
+    const created = [];
+    for (const file of htmlFiles) {
+      const sourcePath = stored.get(file.relativePath);
+      const content = file.buffer.toString('utf8');
+      created.push(
+        await this.createPageFromContent({
+          id: crypto.randomUUID(),
+          fileName: file.fileName,
+          content,
+          sourceType: 'upload',
+          sourcePath,
+          directoryName: parentDirectoryNameFromRelative(file.relativePath),
+          rawMtimeMs: null,
+          assetBaseUrl: hasFolderAssets ? assetBaseUrl(uploadRootId, file.relativePath) : '',
+        }),
+      );
+    }
+    return created;
+  }
+
+  async addSamplePages() {
+    const samples = [
+      {
+        fileName: 'school-admission-page.html',
+        title: '春季招生落地页',
+        body: '<h1>春季招生落地页</h1><p>这是一个已经导入系统的 HTML 页面。打开在线编辑后，可以直接点击正文、标题和列表文字进行修改。</p><h2>核心信息</h2><ul><li>课程名称：AI 编程体验营</li><li>报名时间：2026 年春季批次</li><li>交付形式：本地预览 + 在线编辑</li></ul><blockquote>编辑保存后，后端会重新生成对应的本地 HTML 文件。</blockquote>',
+      },
+      {
+        fileName: 'geo-report-template.html',
+        title: 'GEO 诊断报告模板',
+        body: '<h1>GEO 诊断报告模板</h1><p>页面列表需要展示文件名、页面标题、上传时间和生成后的本地 URL。编辑体验以文档为中心，减少表单感。</p><h2>页面模块</h2><ol><li>品牌可见度摘要</li><li>关键词覆盖情况</li><li>内容优化建议</li></ol>',
+      },
+      {
+        fileName: 'internal-notice.html',
+        title: '内部通知页',
+        body: '<h1>内部通知页</h1><p>轻量页面也可以作为 HTML 资产进入统一管理，后续可增加版本历史、发布状态和目录归档。</p><h2>待办</h2><ul><li>确认输出目录</li><li>确认 Docker volume 映射</li><li>接入 Tiptap 编辑器</li></ul>',
+      },
+    ];
+
+    const created = [];
+    for (const sample of samples) {
+      const content = composeDocument(sample.title, sample.body);
+      created.push(
+        await this.createPageFromContent({
+          id: crypto.randomUUID(),
+          fileName: sample.fileName,
+          content,
+          sourceType: 'upload',
+          sourcePath: null,
+          directoryName: '',
+          rawMtimeMs: null,
+        }),
+      );
+    }
+    return created;
+  }
+
+  async createPageFromContent({ id, fileName, content, sourceType, sourcePath, directoryName, rawMtimeMs, assetBaseUrl: pageAssetBaseUrl = '' }) {
+    const createdAt = nowIso();
+    const parsed = parseHtmlMetadata(content, fileName);
+    const slug = this.uniqueManagedSlug();
+    const generatedPath = path.join(this.config.generatedDir, `${slug}.html`);
+    const generatedContent = this.prepareGeneratedHtml(content, pageAssetBaseUrl);
+    await fs.writeFile(generatedPath, generatedContent);
+    const info = {
+      id,
+      slug,
+      fileName,
+      title: parsed.title,
+      sourceType,
+      sourcePath,
+      directoryName,
+      size: Buffer.byteLength(generatedContent),
+      status: 'published',
+      createdAt,
+      updatedAt: createdAt,
+      revision: 1,
+      generatedPath,
+      rawMtimeMs,
+      checksum: checksum(content),
+      edited: 0,
+      accessCount: 0,
+    };
+    this.db
+      .prepare(
+        `INSERT INTO pages (
+          id, slug, file_name, title, source_type, source_path, directory_name, size, status,
+          created_at, updated_at, revision, generated_path, raw_mtime_ms, checksum, edited, access_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        info.id,
+        info.slug,
+        info.fileName,
+        info.title,
+        info.sourceType,
+        info.sourcePath,
+        info.directoryName,
+        info.size,
+        info.status,
+        info.createdAt,
+        info.updatedAt,
+        info.revision,
+        info.generatedPath,
+        info.rawMtimeMs,
+        info.checksum,
+        info.edited,
+        info.accessCount,
+      );
+    return this.getPage(id);
+  }
+
+  prepareGeneratedHtml(content, pageAssetBaseUrl = '') {
+    const withAssets = injectAssetBase(content, pageAssetBaseUrl);
+    return injectTrackingCode(withAssets, this.getSettings().trackingCode);
+  }
+
+  getSettings() {
+    const auth = this.getAuthSettings(true);
+    const rows = this.db.prepare('SELECT key, value FROM settings').all();
+    const settings = {
+      trackingCode: '',
+      authUsername: auth.authUsername,
+      remoteSyncEnabled: false,
+      remoteSyncUrl: '',
+      remoteSyncHasToken: false,
+    };
+    for (const row of rows) {
+      if (row.key === 'tracking_code') settings.trackingCode = row.value || '';
+      if (row.key === 'remote_sync_enabled') settings.remoteSyncEnabled = row.value === '1';
+      if (row.key === 'remote_sync_url') settings.remoteSyncUrl = row.value || '';
+      if (row.key === 'remote_sync_token') settings.remoteSyncHasToken = Boolean(row.value);
+    }
+    return settings;
+  }
+
+  getRemoteSyncSettings(includeSensitive = false) {
+    const settings = this.getSettings();
+    if (includeSensitive) settings.remoteSyncToken = this.settingValue('remote_sync_token');
+    return settings;
+  }
+
+  async saveSettings(settings = {}) {
+    const now = nowIso();
+    this.ensureAuthSettings();
+    if (Object.prototype.hasOwnProperty.call(settings, 'trackingCode')) {
+      this.db
+        .prepare(
+          `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+        )
+        .run('tracking_code', String(settings.trackingCode || ''), now);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'authUsername')) {
+      const username = String(settings.authUsername || '').trim();
+      if (username) this.setSetting('auth_username', username, now);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'authPassword')) {
+      const password = String(settings.authPassword || '');
+      if (password) this.setSetting('auth_password_hash', hashPassword(password), now);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'remoteSyncEnabled')) {
+      this.setSetting('remote_sync_enabled', settings.remoteSyncEnabled ? '1' : '0', now);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'remoteSyncUrl')) {
+      this.setSetting('remote_sync_url', String(settings.remoteSyncUrl || '').trim(), now);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'remoteSyncToken')) {
+      const token = String(settings.remoteSyncToken || '').trim();
+      if (token) this.setSetting('remote_sync_token', token, now);
+    }
+    return this.getSettings();
+  }
+
+  setSetting(key, value, updatedAt = nowIso()) {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(key, value, updatedAt);
+  }
+
+  settingValue(key) {
+    return this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value || '';
+  }
+
+  ensureAuthSettings() {
+    const now = nowIso();
+    if (!this.settingValue('auth_username')) this.setSetting('auth_username', defaultAuthUsername, now);
+    if (!this.settingValue('auth_password_hash')) this.setSetting('auth_password_hash', hashPassword(defaultAuthPassword), now);
+    if (!this.settingValue('auth_secret')) this.setSetting('auth_secret', crypto.randomBytes(32).toString('base64url'), now);
+  }
+
+  getAuthSettings(includeSensitive = false) {
+    this.ensureAuthSettings();
+    const authSettings = {
+      authUsername: this.settingValue('auth_username'),
+    };
+    if (includeSensitive) {
+      authSettings.authPasswordHash = this.settingValue('auth_password_hash');
+      authSettings.authSecret = this.settingValue('auth_secret');
+    }
+    return authSettings;
+  }
+
+  verifyCredentials(username, password) {
+    const authSettings = this.getAuthSettings(true);
+    return String(username || '') === authSettings.authUsername && verifyPassword(password || '', authSettings.authPasswordHash);
+  }
+
+  createSessionToken(username) {
+    const authSettings = this.getAuthSettings(true);
+    const payload = Buffer.from(JSON.stringify({ username, issuedAt: Date.now() })).toString('base64url');
+    return `${payload}.${signSessionPayload(payload, authSettings)}`;
+  }
+
+  verifySessionToken(token) {
+    const [payload, signature] = String(token || '').split('.');
+    if (!payload || !signature) return null;
+    const authSettings = this.getAuthSettings(true);
+    const expected = signSessionPayload(payload, authSettings);
+    const expectedBuffer = Buffer.from(expected);
+    const signatureBuffer = Buffer.from(signature);
+    if (expectedBuffer.length !== signatureBuffer.length || !crypto.timingSafeEqual(expectedBuffer, signatureBuffer)) return null;
+    try {
+      const session = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+      if (session.username !== authSettings.authUsername) return null;
+      return { username: session.username };
+    } catch {
+      return null;
+    }
+  }
+
+  incrementAccessCount(id) {
+    this.db.prepare('UPDATE pages SET access_count = access_count + 1 WHERE id = ?').run(id);
+    return this.getPage(id);
+  }
+
+  uniqueSlug(base, pageId = null) {
+    let slug = base || 'page';
+    let index = 2;
+    while (true) {
+      const row = this.db.prepare('SELECT id FROM pages WHERE slug = ?').get(slug);
+      if (!row || row.id === pageId) return slug;
+      slug = `${base}-${index}`;
+      index += 1;
+    }
+  }
+
+  uniqueManagedSlug() {
+    for (let attempt = 0; attempt < 32; attempt += 1) {
+      const slug = buildManagedSlug();
+      const row = this.db.prepare('SELECT id FROM pages WHERE slug = ?').get(slug);
+      if (!row) return slug;
+    }
+    throw new Error('Unable to generate a unique page URL');
+  }
+
+  listWatchDirs() {
+    return this.db.prepare('SELECT * FROM watch_dirs ORDER BY created_at ASC').all().map(rowToWatchDir);
+  }
+
+  getWatchDir(id) {
+    return rowToWatchDir(this.db.prepare('SELECT * FROM watch_dirs WHERE id = ?').get(id));
+  }
+
+  async addWatchDir({ path: watchPath, name, allowWrite = false, createIfMissing = true }) {
+    const absolutePath = path.resolve(watchPath);
+    if (createIfMissing) await fs.mkdir(absolutePath, { recursive: true });
+    const existing = this.db.prepare('SELECT * FROM watch_dirs WHERE path = ?').get(absolutePath);
+    if (existing) return rowToWatchDir(existing);
+    const now = nowIso();
+    const id = crypto.randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO watch_dirs (id, path, name, allow_write, status, html_count, last_scan_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, absolutePath, name || path.basename(absolutePath), allowWrite ? 1 : 0, 'active', 0, null, now, now);
+    return this.getWatchDir(id);
+  }
+
+  async removeWatchDir(id) {
+    const watchDir = this.getWatchDir(id);
+    if (!watchDir) return null;
+    this.db.prepare('DELETE FROM watch_dirs WHERE id = ?').run(id);
+    return watchDir;
+  }
+
+  async rescanWatchDir(id) {
+    const watchDir = this.getWatchDir(id);
+    if (!watchDir) throw new Error('Watch directory not found');
+    await fs.mkdir(watchDir.path, { recursive: true });
+    const files = await this.findHtmlFiles(watchDir.path);
+    for (const filePath of files) {
+      await this.upsertWatchedFile(filePath);
+    }
+    const now = nowIso();
+    this.db
+      .prepare('UPDATE watch_dirs SET html_count = ?, last_scan_at = ?, status = ?, updated_at = ? WHERE id = ?')
+      .run(files.length, now, 'updated', now, id);
+    return this.getWatchDir(id);
+  }
+
+  async findHtmlFiles(dirPath) {
+    const found = [];
+    const visit = async (current) => {
+      const entries = await fs.readdir(current, { withFileTypes: true });
+      for (const entry of entries) {
+        const next = path.join(current, entry.name);
+        if (entry.isDirectory()) await visit(next);
+        if (entry.isFile() && isHtmlFile(entry.name)) found.push(next);
+      }
+    };
+    await visit(dirPath);
+    return found;
+  }
+
+  async upsertWatchedFile(filePath) {
+    if (!isHtmlFile(filePath)) return null;
+    const absolutePath = path.resolve(filePath);
+    const stat = await fs.stat(absolutePath);
+    const content = await fs.readFile(absolutePath, 'utf8');
+    const nextChecksum = checksum(content);
+    const existingRow = this.db.prepare('SELECT * FROM pages WHERE source_path = ? AND deleted_at IS NULL').get(absolutePath);
+    if (!existingRow) {
+      return this.createPageFromContent({
+        id: crypto.randomUUID(),
+        fileName: path.basename(absolutePath),
+        content,
+        sourceType: 'watch',
+        sourcePath: absolutePath,
+        directoryName: parentDirectoryNameFromPath(absolutePath),
+        rawMtimeMs: Math.round(stat.mtimeMs),
+      });
+    }
+    if (existingRow.checksum === nextChecksum && existingRow.raw_mtime_ms === Math.round(stat.mtimeMs)) {
+      return rowToPage(existingRow);
+    }
+    const page = rowToPage(existingRow);
+    await this.writeVersion(page, await this.readPageHtml(page), 'external-change');
+    await fs.writeFile(page.generatedPath, this.prepareGeneratedHtml(content));
+    const parsed = parseHtmlMetadata(content, page.fileName);
+    const now = nowIso();
+    this.db
+      .prepare(
+        `UPDATE pages SET title = ?, size = ?, status = ?, updated_at = ?, revision = revision + 1,
+         raw_mtime_ms = ?, checksum = ?, edited = 0 WHERE id = ?`,
+      )
+      .run(parsed.title, Buffer.byteLength(content), 'published', now, Math.round(stat.mtimeMs), nextChecksum, page.id);
+    return this.getPage(page.id);
+  }
+
+  async markSourceDeleted(filePath) {
+    const absolutePath = path.resolve(filePath);
+    const row = this.db.prepare('SELECT * FROM pages WHERE source_path = ? AND deleted_at IS NULL').get(absolutePath);
+    if (!row) return null;
+    const now = nowIso();
+    this.db.prepare('UPDATE pages SET status = ?, updated_at = ? WHERE id = ?').run('missing', now, row.id);
+    return this.getPage(row.id);
+  }
+
+  async savePageContent(id, { html, body, title, revision, reason = 'autosave' }) {
+    const page = this.getPage(id);
+    if (!page || page.deletedAt) {
+      const error = new Error('Page not found');
+      error.code = 'NOT_FOUND';
+      throw error;
+    }
+    if (revision != null && Number(revision) !== Number(page.revision)) {
+      const error = new Error('Revision conflict');
+      error.code = 'REVISION_CONFLICT';
+      error.page = page;
+      throw error;
+    }
+    const currentContent = await this.readPageHtml(page);
+    await this.writeVersion(page, currentContent, reason);
+    const nextContent = removeEditBridge(html || composeDocument(title || page.title, body || ''));
+    const parsed = parseHtmlMetadata(nextContent, page.fileName);
+    await fs.writeFile(page.generatedPath, nextContent);
+    const watchDir = this.watchDirForPath(page.sourcePath);
+    if (page.sourceType === 'watch' && watchDir?.allowWrite) {
+      await fs.writeFile(page.sourcePath, nextContent);
+    }
+    const now = nowIso();
+    this.db
+      .prepare(
+        `UPDATE pages SET title = ?, size = ?, status = ?, updated_at = ?, revision = revision + 1,
+         checksum = ?, edited = 1 WHERE id = ?`,
+      )
+      .run(parsed.title, Buffer.byteLength(nextContent), 'edited', now, checksum(nextContent), id);
+    return this.getPage(id);
+  }
+
+  watchDirForPath(filePath) {
+    if (!filePath) return null;
+    return this.listWatchDirs()
+      .sort((a, b) => b.path.length - a.path.length)
+      .find((dir) => path.resolve(filePath).startsWith(`${path.resolve(dir.path)}${path.sep}`));
+  }
+
+  async writeVersion(page, content, reason) {
+    const id = crypto.randomUUID();
+    const versionDir = path.join(this.config.versionsDir, page.id);
+    await fs.mkdir(versionDir, { recursive: true });
+    const contentPath = path.join(versionDir, `${String(page.revision).padStart(5, '0')}-${Date.now()}.html`);
+    await fs.writeFile(contentPath, content);
+    this.db
+      .prepare('INSERT INTO versions (id, page_id, revision, title, content_path, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(id, page.id, page.revision, page.title, contentPath, reason, nowIso());
+    return this.getVersion(id);
+  }
+
+  listVersions(pageId) {
+    return this.db
+      .prepare('SELECT * FROM versions WHERE page_id = ? ORDER BY created_at DESC')
+      .all(pageId)
+      .map((row) => ({
+        id: row.id,
+        pageId: row.page_id,
+        revision: row.revision,
+        title: row.title,
+        reason: row.reason,
+        createdAt: row.created_at,
+        createdTime: displayTime(row.created_at),
+      }));
+  }
+
+  getVersion(id) {
+    const row = this.db.prepare('SELECT * FROM versions WHERE id = ?').get(id);
+    if (!row) return null;
+    return {
+      id: row.id,
+      pageId: row.page_id,
+      revision: row.revision,
+      title: row.title,
+      contentPath: row.content_path,
+      reason: row.reason,
+      createdAt: row.created_at,
+    };
+  }
+
+  async restoreVersion(pageId, versionId) {
+    const page = this.getPage(pageId);
+    const version = this.getVersion(versionId);
+    if (!page || !version || version.pageId !== pageId) {
+      const error = new Error('Version not found');
+      error.code = 'NOT_FOUND';
+      throw error;
+    }
+    const content = await fs.readFile(version.contentPath, 'utf8');
+    return this.savePageContent(pageId, {
+      html: content,
+      revision: page.revision,
+      reason: `restore-${version.revision}`,
+    });
+  }
+
+  async deletePage(id) {
+    const page = this.getPage(id);
+    if (!page) return null;
+    if (page.deletedAt) return page;
+    const now = nowIso();
+    const trashGeneratedDir = path.join(this.trashDir(), 'generated');
+    await fs.mkdir(trashGeneratedDir, { recursive: true });
+    const trashPath = path.join(trashGeneratedDir, `${page.id}-${page.slug}.html`);
+    try {
+      await fs.rename(page.generatedPath, trashPath);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    this.db
+      .prepare('UPDATE pages SET status = ?, generated_path = ?, deleted_at = ?, deleted_path = ?, updated_at = ? WHERE id = ?')
+      .run('trashed', trashPath, now, trashPath, now, id);
+    return this.getPage(id);
+  }
+
+  async restoreDeletedPage(id) {
+    const page = this.getPage(id);
+    if (!page) return null;
+    if (!page.deletedAt) return page;
+    const restoredPath = path.join(this.config.generatedDir, `${page.slug}.html`);
+    await fs.mkdir(path.dirname(restoredPath), { recursive: true });
+    const sourcePath = page.generatedPath || page.deletedPath;
+    try {
+      await fs.rename(sourcePath, restoredPath);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      if (page.deletedPath && page.deletedPath !== sourcePath) {
+        await fs.rename(page.deletedPath, restoredPath);
+      } else {
+        const notFound = new Error('Deleted file not found');
+        notFound.code = 'NOT_FOUND';
+        throw notFound;
+      }
+    }
+    const now = nowIso();
+    const status = page.edited ? 'edited' : 'published';
+    this.db
+      .prepare('UPDATE pages SET status = ?, generated_path = ?, deleted_at = NULL, deleted_path = NULL, updated_at = ? WHERE id = ?')
+      .run(status, restoredPath, now, id);
+    return this.getPage(id);
+  }
+}
